@@ -50,6 +50,48 @@ class TimingStats:
         d["it_per_sec"] = round(num_steps / d["wall_total_s"], 2) if d["wall_total_s"] > 0 else 0
         return d
 
+
+def _get_timeline_context():
+    """Return the Isaac timeline and Kit app after IsaacSim has launched."""
+    import omni.kit.app
+    import omni.timeline
+
+    return omni.timeline.get_timeline_interface(), omni.kit.app.get_app()
+
+
+def _ensure_timeline_playing(timeline, *, context: str) -> None:
+    """Start the Isaac timeline when policy evaluation needs simulation time."""
+    if timeline.is_playing():
+        return
+
+    try:
+        timeline.play()
+    except Exception:
+        logger.exception("Failed to start simulation timeline before %s", context)
+        raise
+    logger.debug("Started simulation timeline before %s", context)
+
+
+def _wait_for_timeline(timeline, kit_app, *, step: int, log_interval_s: float = 5.0) -> None:
+    """Keep Kit responsive while waiting for the timeline to enter playing state."""
+    if timeline.is_playing():
+        return
+
+    _ensure_timeline_playing(timeline, context=f"step {step}")
+    wait_start = time.perf_counter()
+    last_log = wait_start
+    while not timeline.is_playing():
+        now = time.perf_counter()
+        if now - last_log >= log_interval_s:
+            logger.warning("Waiting for simulation timeline before step %d (%.1f s)", step, now - wait_start)
+            last_log = now
+        kit_app.update()
+
+    waited_s = time.perf_counter() - wait_start
+    if waited_s > 0:
+        logger.debug("Simulation timeline resumed before step %d after %.3f s", step, waited_s)
+
+
 from robolab.constants import VISUALIZE, get_output_dir
 from robolab.core.logging.results import get_all_env_subtask_infos
 from robolab.core.observations.observation_utils import unpack_image_obs, unpack_viewport_cams
@@ -83,7 +125,8 @@ def run_episode(env, env_cfg, episode, client: InferenceClient, *, headless=Fals
     """
     timer = TimingStats()
 
-    obs, _ = env.reset()
+    timeline, kit_app = _get_timeline_context()
+    _ensure_timeline_playing(timeline, context="environment reset")
     obs, _ = env.reset()
     max_steps = env.max_episode_length
     video_fps = 1 / (env_cfg.sim.render_interval * env_cfg.sim.dt) # Hz
@@ -123,17 +166,19 @@ def run_episode(env, env_cfg, episode, client: InferenceClient, *, headless=Fals
                 video_path_viewport = os.path.join(get_output_dir(), f"{cleaned_instruction}{suffix}_viewport.mp4")
                 video_writers_viewport.append(VideoWriter(video_path_viewport, video_fps))
 
-    import omni.kit.app
-    import omni.timeline
-    timeline = omni.timeline.get_timeline_interface()
-    kit_app = omni.kit.app.get_app()
+    _ensure_timeline_playing(timeline, context="episode rollout")
 
     actual_steps = 0
     try:
         for step in tqdm(range(max_steps)):
 
-            while not timeline.is_playing():
-                kit_app.update()
+            if step == 0:
+                logger.debug(
+                    "Starting episode rollout: active_env_ids=%s max_steps=%d",
+                    list(env.active_env_ids),
+                    max_steps,
+                )
+            _wait_for_timeline(timeline, kit_app, step=step)
 
             timer.start("policy_inference")
             # Infer actions for all active (non-frozen) envs
