@@ -4,6 +4,7 @@
 """Evaluate the Cosmos3 policy backend across registered tasks."""
 
 import argparse
+import logging
 import sys
 import traceback
 
@@ -11,6 +12,7 @@ import cv2  # Must import this before isaaclab. Do not remove
 from isaaclab.app import AppLauncher
 
 POLICY = "cosmos3"
+logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser(description="Evaluate the Cosmos3 policy backend.")
 parser.add_argument(
@@ -20,7 +22,7 @@ parser.add_argument(
     "--remote-port", default=8000, type=int, help="Remote port for policy server (default: 8000)."
 )
 
-from robolab.eval.runner import add_common_eval_args, run_evaluation
+from robolab.eval.runner import add_common_eval_args, clear_task_filter_for_explicit_paths, run_evaluation
 
 add_common_eval_args(parser)
 AppLauncher.add_app_launcher_args(parser)
@@ -36,6 +38,8 @@ from robolab.registrations.droid.auto_env_registrations_jointpos import auto_reg
 from robolab.registrations.droid.camera_presets import WRIST_LEFT_RIGHT_HEAD
 
 auto_register_droid_envs(task=args_cli.task, cameras=WRIST_LEFT_RIGHT_HEAD)
+if clear_task_filter_for_explicit_paths(args_cli):
+    logger.debug("Registered explicit task path(s); cleared eval task filter.")
 
 
 def make_client(args: argparse.Namespace) -> Cosmos3Client:

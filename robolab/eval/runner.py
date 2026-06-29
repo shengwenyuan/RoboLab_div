@@ -87,6 +87,25 @@ def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
                               "'viewport' only, 'sensor' only, or 'none' (default: all)."))
 
 
+def clear_task_filter_for_explicit_paths(args: argparse.Namespace) -> bool:
+    """Clear eval filtering after registration from explicit task file paths.
+
+    Registration accepts task names, filenames, and absolute/relative ``.py``
+    paths. Evaluation filtering only matches registered environment names, so a
+    path-style task argument should be used for registration and then removed
+    before :func:`run_evaluation` queries the registry.
+    """
+    tasks = getattr(args, "task", None)
+    if not tasks:
+        return False
+
+    if not any(("/" in task or "\\" in task or task.endswith(".py")) for task in tasks):
+        return False
+
+    args.task = None
+    return True
+
+
 def run_evaluation(
     args: argparse.Namespace,
     *,
