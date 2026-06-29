@@ -107,8 +107,28 @@ class Cosmos3Client(InferenceClient):
         }
 
     def _query_server(self, request: dict) -> dict:
-        """ """
-        return self._infer_with_retry(request)
+        """Send a request to the policy server."""
+        logger.debug(
+            "[%s] Querying server: prompt=%r image_shape=%s joint_shape=%s gripper_shape=%s",
+            self.__class__.__name__,
+            request.get("prompt"),
+            getattr(request.get("observation/image"), "shape", None),
+            getattr(request.get("observation/joint_position"), "shape", None),
+            getattr(request.get("observation/gripper_position"), "shape", None),
+        )
+        response = self._infer_with_retry(request)
+        if logger.isEnabledFor(logging.DEBUG):
+            action = response.get("action") if isinstance(response, dict) else None
+            server_timing = response.get("server_timing") if isinstance(response, dict) else None
+            response_keys = sorted(response.keys()) if isinstance(response, dict) else type(response).__name__
+            logger.debug(
+                "[%s] Server response: keys=%s action_shape=%s server_timing=%s",
+                self.__class__.__name__,
+                response_keys,
+                getattr(action, "shape", None),
+                server_timing,
+            )
+        return response
 
     def _unpack_response(self, response: dict) -> np.ndarray:
         """ """
