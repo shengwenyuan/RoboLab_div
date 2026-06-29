@@ -40,6 +40,10 @@ class BananaBowlTableOakScene:
             rot=(0.67, -0.74, 0.0, 0.0),
         )
     )
+    table = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/scene/table",
+        spawn=None,
+    )
 
 @configclass
 class BananaInBowlTerminations:
