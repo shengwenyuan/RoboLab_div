@@ -82,7 +82,7 @@ def auto_register_droid_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensi
         rng = random.Random(background_seed)
         all_bgs = find_background_files()
         # Exclude the default so this is genuinely "besides the default"
-        default_bg_path = HomeOfficeBackgroundCfg.dome_light.spawn.texture_file
+        default_bg_path = getattr(HomeOfficeBackgroundCfg().dome_light.spawn, "texture_file", None)
         all_bgs = [p for p in all_bgs if p != default_bg_path]
         if not all_bgs:
             raise FileNotFoundError(

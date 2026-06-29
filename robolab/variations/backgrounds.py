@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import os
 import random
 import re
@@ -10,6 +11,32 @@ from isaaclab.assets import AssetBaseCfg
 from isaaclab.utils import configclass
 
 from robolab.constants import BACKGROUND_ASSET_DIR
+
+
+logger = logging.getLogger(__name__)
+_GIT_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
+
+
+def _is_git_lfs_pointer(file_path: str) -> bool:
+    try:
+        with open(file_path, "rb") as f:
+            return f.read(len(_GIT_LFS_POINTER_PREFIX)).startswith(_GIT_LFS_POINTER_PREFIX)
+    except OSError:
+        return False
+
+
+def _make_dome_light_cfg(texture_file: str | None = None, *, intensity: float = 500.0) -> sim_utils.DomeLightCfg:
+    kwargs = {"intensity": intensity, "visible_in_primary_ray": True}
+    if texture_file is not None:
+        kwargs.update(texture_file=texture_file, texture_format="latlong")
+    return sim_utils.DomeLightCfg(**kwargs)
+
+
+def _make_background_asset(texture_file: str | None = None, *, intensity: float = 500.0) -> AssetBaseCfg:
+    return AssetBaseCfg(
+        prim_path="/World/background",
+        spawn=_make_dome_light_cfg(texture_file, intensity=intensity),
+    )
 
 
 def find_background_files(folder_path: str = BACKGROUND_ASSET_DIR, filename: str = None, extensions=None):
@@ -55,6 +82,9 @@ def find_background_files(folder_path: str = BACKGROUND_ASSET_DIR, filename: str
             if file_ext in extensions:
                 # Get relative path from folder_path
                 full_path = os.path.join(root, file)
+                if _is_git_lfs_pointer(full_path):
+                    logger.debug("Skipping Git LFS pointer background file: %s", full_path)
+                    continue
                 background_files.append(full_path)
 
                 # If searching for specific filename and found it, return immediately
@@ -71,51 +101,22 @@ def find_background_files(folder_path: str = BACKGROUND_ASSET_DIR, filename: str
 # Some hardcoded examples
 @configclass
 class EmptyWarehouseBackgroundCfg:
-    dome_light = AssetBaseCfg(
-    prim_path="/World/background",
-    spawn=sim_utils.DomeLightCfg(
-        texture_file=find_background_files(BACKGROUND_ASSET_DIR, "empty_warehouse.hdr"),
-        intensity=500.0,
-        visible_in_primary_ray=True,
-        texture_format="latlong",
-        ),
-    )
+    dome_light = _make_background_asset(find_background_files(BACKGROUND_ASSET_DIR, "empty_warehouse.hdr"))
+
 
 @configclass
 class BilliardHallBackgroundCfg:
-    dome_light = AssetBaseCfg(
-    prim_path="/World/background",
-    spawn=sim_utils.DomeLightCfg(
-        texture_file=find_background_files(BACKGROUND_ASSET_DIR, "billiard_hall.hdr"),
-        intensity=500.0,
-        visible_in_primary_ray=True,
-        texture_format="latlong",
-        ),
-    )
+    dome_light = _make_background_asset(find_background_files(BACKGROUND_ASSET_DIR, "billiard_hall.hdr"))
+
 
 @configclass
 class BrownPhotoStudioBackgroundCfg:
-    dome_light = AssetBaseCfg(
-    prim_path="/World/background",
-    spawn=sim_utils.DomeLightCfg(
-        texture_file=find_background_files(BACKGROUND_ASSET_DIR, "brown_photostudio.hdr"),
-        intensity=500.0,
-        visible_in_primary_ray=True,
-        texture_format="latlong",
-        ),
-    )
+    dome_light = _make_background_asset(find_background_files(BACKGROUND_ASSET_DIR, "brown_photostudio.hdr"))
+
 
 @configclass
 class HomeOfficeBackgroundCfg:
-    dome_light = AssetBaseCfg(
-    prim_path="/World/background",
-    spawn=sim_utils.DomeLightCfg(
-        texture_file=find_background_files(BACKGROUND_ASSET_DIR, "home_office.exr"),
-        intensity=500.0,
-        visible_in_primary_ray=True,
-        texture_format="latlong",
-        ),
-    )
+    dome_light = _make_background_asset(find_background_files(BACKGROUND_ASSET_DIR, "home_office.exr"))
 
 
 def find_and_generate_background_config(filename: str | None = None,
@@ -170,26 +171,21 @@ def generate_background_config(background_path: str, class_name: str = None, int
     if not os.path.isfile(background_path):
         raise FileNotFoundError(f"Background file '{background_path}' does not exist or is not a file.")
 
-    # Generate class name if not provided
-    if class_name is None:
-        # Remove file extension and convert to CamelCase using background_path basename
-        base_name = os.path.splitext(os.path.basename(background_path))[0]
-        # Convert underscores and spaces to camelcase
-        words = re.split(r'[_\s]+', base_name)
-        class_name = ''.join(word.capitalize() for word in words) + "BackgroundCfg"
+    if _is_git_lfs_pointer(background_path):
+        logger.warning("Using untextured DomeLight because background is a Git LFS pointer: %s", background_path)
+        background_path = None
 
-    # Create the configclass dynamically
+    if class_name is None:
+        if background_path is None:
+            class_name = "UntexturedBackgroundCfg"
+        else:
+            base_name = os.path.splitext(os.path.basename(background_path))[0]
+            words = re.split(r'[_\s]+', base_name)
+            class_name = ''.join(word.capitalize() for word in words) + "BackgroundCfg"
+
     @configclass
     class GeneratedBackgroundConfig:
-        dome_light = AssetBaseCfg(
-            prim_path="/World/background",
-            spawn=sim_utils.DomeLightCfg(
-                texture_file=background_path,
-                intensity=intensity,
-                visible_in_primary_ray=True,
-                texture_format="latlong",
-            ),
-        )
+        dome_light = _make_background_asset(background_path, intensity=intensity)
 
     # Set the class name for better debugging/introspection
     GeneratedBackgroundConfig.__name__ = class_name
