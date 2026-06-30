@@ -4,10 +4,14 @@
 # This file is the source of truth. A verbatim copy lives at
 # droid_plus/eval/base_client.py — keep both in sync when editing.
 
+import logging
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 class InferenceClient(ABC):
@@ -55,7 +59,27 @@ class InferenceClient(ABC):
 
         if self._needs_refresh(env_id):
             request = self._pack_request(extracted, instruction)
-            response = self._query_server(request)
+            query_start = time.perf_counter()
+            try:
+                response = self._query_server(request)
+            except Exception:
+                elapsed_ms = (time.perf_counter() - query_start) * 1000.0
+                logger.warning(
+                    "[%s] event=inference_query status=error elapsed_ms=%.1f env_id=%d horizon=%d",
+                    self.__class__.__name__,
+                    elapsed_ms,
+                    env_id,
+                    self.open_loop_horizon,
+                )
+                raise
+            elapsed_ms = (time.perf_counter() - query_start) * 1000.0
+            logger.info(
+                "[%s] event=inference_query status=ok elapsed_ms=%.1f env_id=%d horizon=%d",
+                self.__class__.__name__,
+                elapsed_ms,
+                env_id,
+                self.open_loop_horizon,
+            )
             chunk = self._unpack_response(response)
             chunk = self._postprocess_chunk(chunk)
             self._set_chunk(env_id, chunk)
