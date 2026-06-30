@@ -27,6 +27,7 @@ The core concepts are:
 - **[Conditionals](task_conditionals.md)** — Predicate logic for defining success/failure conditions
 - **[Event Tracking](event_tracking.md)** — Monitoring task-relevant events during execution
 #### Variations
+- **[Variation Map](variations.md)** — Mental model for registration-time configs, eval sweeps, and reset-time events
 - **[Robots](robots.md)** — Robot articulation configs, actuators, and action spaces
 - **[Cameras](camera.md)** — Scene cameras and robot-attached cameras
 - **[Lighting](lighting.md)** — Scene lighting (sphere, directional, and custom lights)
