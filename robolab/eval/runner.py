@@ -42,6 +42,58 @@ def _unit_interval(s: str) -> float:
     return v
 
 
+def _nonnegative_float(s: str) -> float:
+    v = float(s)
+    if v < 0.0:
+        raise argparse.ArgumentTypeError(f"value must be >= 0, got {v}")
+    return v
+
+
+def _positive_int(s: str) -> int:
+    v = int(s)
+    if v <= 0:
+        raise argparse.ArgumentTypeError(f"value must be > 0, got {v}")
+    return v
+
+
+def _symmetric_range(radius: float) -> tuple[float, float]:
+    return (-radius, radius)
+
+
+def _fixed_or_symmetric_range(value: float | None, radius: float) -> tuple[float, float]:
+    if value is None:
+        return _symmetric_range(radius)
+    return (value, value)
+
+
+def _build_contact_pose_events(args: argparse.Namespace):
+    if not getattr(args, "randomize_contact_pose", False):
+        return None
+
+    from robolab.core.events.reset_contact_pose import RandomizeContactObjectPoseUniform
+
+    xy = args.contact_pose_xy_range
+    z = args.contact_pose_z_range
+    roll_pitch = args.contact_pose_roll_pitch_range
+    yaw = args.contact_pose_yaw_range
+    pose_range = {
+        "x": _fixed_or_symmetric_range(args.contact_pose_x_offset, xy),
+        "y": _fixed_or_symmetric_range(args.contact_pose_y_offset, xy),
+        "z": _symmetric_range(z),
+        "roll": _symmetric_range(roll_pitch),
+        "pitch": _symmetric_range(roll_pitch),
+        "yaw": _fixed_or_symmetric_range(args.contact_pose_yaw_offset, yaw),
+    }
+    return RandomizeContactObjectPoseUniform.from_params(
+        pose_range=pose_range,
+        include_names=args.contact_pose_include,
+        exclude_names=args.contact_pose_exclude,
+        use_collision_check=not args.disable_contact_pose_collision_check,
+        collision_margin=args.contact_pose_collision_margin,
+        max_retries=args.contact_pose_max_retries,
+    )
+
+
 def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
     """Add the shared eval flags. Call this once per runner script."""
     parser.add_argument("--num-envs", "--num_envs", type=int, default=1,
@@ -85,6 +137,42 @@ def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
                         choices=["all", "viewport", "sensor", "none"],
                         help=("Which videos to save: 'all' (sensor + viewport), "
                               "'viewport' only, 'sensor' only, or 'none' (default: all)."))
+    parser.add_argument("--randomize-contact-pose", "--randomize_contact_pose", action="store_true",
+                        help=("Randomize movable contact object poses at each episode reset. "
+                              "Objects are selected from env_cfg.contact_object_list and filtered "
+                              "to env.scene.rigid_objects."))
+    parser.add_argument("--contact-pose-xy-range", "--contact_pose_xy_range", type=_nonnegative_float,
+                        default=0.0, metavar="M",
+                        help="Symmetric x/y position offset range in meters when contact pose randomization is enabled.")
+    parser.add_argument("--contact-pose-z-range", "--contact_pose_z_range", type=_nonnegative_float,
+                        default=0.0, metavar="M",
+                        help="Symmetric z position offset range in meters when contact pose randomization is enabled.")
+    parser.add_argument("--contact-pose-roll-pitch-range", "--contact_pose_roll_pitch_range",
+                        type=_nonnegative_float, default=0.0, metavar="RAD",
+                        help="Symmetric roll/pitch orientation offset range in radians.")
+    parser.add_argument("--contact-pose-yaw-range", "--contact_pose_yaw_range", type=_nonnegative_float,
+                        default=0.0, metavar="RAD",
+                        help="Symmetric yaw orientation offset range in radians.")
+    parser.add_argument("--contact-pose-x-offset", "--contact_pose_x_offset", type=float, default=None, metavar="M",
+                        help="Fixed x position offset in meters. Overrides --contact-pose-xy-range for x.")
+    parser.add_argument("--contact-pose-y-offset", "--contact_pose_y_offset", type=float, default=None, metavar="M",
+                        help="Fixed y position offset in meters. Overrides --contact-pose-xy-range for y.")
+    parser.add_argument("--contact-pose-yaw-offset", "--contact_pose_yaw_offset", type=float, default=None, metavar="RAD",
+                        help="Fixed yaw orientation offset in radians. Overrides --contact-pose-yaw-range.")
+    parser.add_argument("--contact-pose-include", "--contact_pose_include", nargs="+", default=None,
+                        help="Optional contact object names to randomize. Defaults to all movable contact objects.")
+    parser.add_argument("--contact-pose-exclude", "--contact_pose_exclude", nargs="+",
+                        default=["table", "franka_table", "floor", "ground"],
+                        help="Contact object names to exclude from pose randomization.")
+    parser.add_argument("--contact-pose-collision-margin", "--contact_pose_collision_margin",
+                        type=_nonnegative_float, default=0.01, metavar="M",
+                        help="Extra XY clearance margin for contact pose collision checks, in meters.")
+    parser.add_argument("--contact-pose-max-retries", "--contact_pose_max_retries",
+                        type=_positive_int, default=100,
+                        help="Maximum collision-free sampling attempts per object and env.")
+    parser.add_argument("--disable-contact-pose-collision-check", "--disable_contact_pose_collision_check",
+                        action="store_true",
+                        help="Disable collision-aware sampling for contact pose randomization.")
 
 
 def clear_task_filter_for_explicit_paths(args: argparse.Namespace) -> bool:
@@ -183,6 +271,7 @@ def run_evaluation(
     episode_results_file, episode_results = init_experiment(output_dir)
 
     save_videos = args.video_mode != "none"
+    eval_events = _build_contact_pose_events(args)
 
     for task_env in task_envs:
         scene_output_dir = os.path.join(output_dir, task_env)
@@ -201,6 +290,7 @@ def run_evaluation(
             num_envs=num_envs,
             instruction_type=args.instruction_type,
             policy=policy,
+            events=eval_events,
         )
 
         client = client_factory(args)
