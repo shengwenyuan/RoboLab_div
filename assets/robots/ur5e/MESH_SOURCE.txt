@@ -1,0 +1,5 @@
+UR5e visual and collision meshes downloaded from UniversalRobots/Universal_Robots_ROS2_Description tag 4.3.1.
+Repository: https://github.com/UniversalRobots/Universal_Robots_ROS2_Description/tree/4.3.1
+Mesh root: https://raw.githubusercontent.com/UniversalRobots/Universal_Robots_ROS2_Description/4.3.1/meshes/ur5e/
+Local URDF use: ur5e_mesh.urdf uses the official DAE visual meshes while retaining simple primitive collision geometry from ur5e_primitive.urdf.
+License files copied locally as LICENSE.Universal_Robots_ROS2_Description and README.Universal_Robots_ROS2_Description.md.

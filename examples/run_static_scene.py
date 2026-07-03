@@ -23,6 +23,12 @@ parser.add_argument(
     default=None,
     help="Registered env name to run. Default: first environment registered from --task.",
 )
+parser.add_argument(
+    "--robot",
+    choices=["droid", "ur5e"],
+    default="droid",
+    help="Robot to launch in the task scene. Default: droid.",
+)
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environment copies.")
 parser.add_argument(
     "--num-steps",
@@ -66,8 +72,19 @@ from robolab.robots.droid import (  # noqa: E402
     WristCameraCfg,
     contact_gripper,
 )
+from robolab.robots.ur5 import (  # noqa: E402
+    ARM_JOINT_NAMES as UR5_ARM_JOINT_NAMES,
+)
+from robolab.robots.ur5 import (  # noqa: E402
+    ProprioceptionObservationCfg as UR5ProprioceptionObservationCfg,
+)
+from robolab.robots.ur5 import (  # noqa: E402
+    UR5eCfg,
+    UR5eJointPositionActionCfg,
+    contact_gripper as ur5e_contact_gripper,
+)
 from robolab.variations.backgrounds import HomeOfficeBackgroundCfg  # noqa: E402
-from robolab.variations.camera import EgocentricMirroredCameraCfg  # noqa: E402
+from robolab.variations.camera import EgocentricMirroredCameraCfg, OverShoulderLeftCameraCfg  # noqa: E402
 from robolab.variations.lighting import SphereLightCfg  # noqa: E402
 
 
@@ -83,16 +100,32 @@ class PlainBackgroundCfg:
 
 
 def register_single_task(task: str) -> None:
-    image_obs_cfg = generate_image_obs_from_cameras(WRIST_LEFT)
+    if args_cli.robot == "droid":
+        image_cameras = WRIST_LEFT
+        proprio_obs_cfg = ProprioceptionObservationCfg
+        scene_cameras = [camera for camera in WRIST_LEFT if camera is not WristCameraCfg]
+        actions_cfg = DroidJointPositionActionCfg
+        robot_cfg = DroidCfg
+        task_contact_gripper = contact_gripper
+        env_postfix = ""
+    else:
+        image_cameras = [OverShoulderLeftCameraCfg]
+        proprio_obs_cfg = UR5ProprioceptionObservationCfg
+        scene_cameras = image_cameras
+        actions_cfg = UR5eJointPositionActionCfg
+        robot_cfg = UR5eCfg
+        task_contact_gripper = ur5e_contact_gripper
+        env_postfix = "UR5eJointPosition"
+
+    image_obs_cfg = generate_image_obs_from_cameras(image_cameras)
     viewport_obs_cfg = generate_image_obs_from_cameras([EgocentricMirroredCameraCfg])
     observation_cfg = generate_obs_cfg(
         {
             "image_obs": image_obs_cfg(),
-            "proprio_obs": ProprioceptionObservationCfg(),
+            "proprio_obs": proprio_obs_cfg(),
             "viewport_cam": viewport_obs_cfg(),
         }
     )
-    scene_cameras = [camera for camera in WRIST_LEFT if camera is not WristCameraCfg]
     background_cfg = HomeOfficeBackgroundCfg if args_cli.background == "home_office" else PlainBackgroundCfg
 
     auto_discover_and_create_cfgs(
@@ -101,14 +134,14 @@ def register_single_task(task: str) -> None:
         tasks=task,
         pattern="*.py",
         env_prefix="",
-        env_postfix="",
+        env_postfix=env_postfix,
         observations_cfg=observation_cfg(),
-        actions_cfg=DroidJointPositionActionCfg(),
-        robot_cfg=DroidCfg,
+        actions_cfg=actions_cfg(),
+        robot_cfg=robot_cfg,
         camera_cfg=[*scene_cameras, EgocentricMirroredCameraCfg],
         lighting_cfg=SphereLightCfg,
         background_cfg=background_cfg,
-        contact_gripper=contact_gripper,
+        contact_gripper=task_contact_gripper,
         dt=1 / (60 * 2),
         render_interval=8,
         decimation=8,
@@ -139,9 +172,13 @@ def main() -> None:
 
         step = 0
         while simulation_app.is_running() and (args_cli.num_steps < 0 or step < args_cli.num_steps):
-            arm_action = robot.data.joint_pos[:, :7].clone()
-            gripper_action = torch.full((env.num_envs, 1), args_cli.gripper, device=env.device)
-            action = torch.cat([arm_action, gripper_action], dim=1)
+            if args_cli.robot == "droid":
+                arm_action = robot.data.joint_pos[:, :7].clone()
+                gripper_action = torch.full((env.num_envs, 1), args_cli.gripper, device=env.device)
+                action = torch.cat([arm_action, gripper_action], dim=1)
+            else:
+                joint_ids = [robot.data.joint_names.index(name) for name in UR5_ARM_JOINT_NAMES]
+                action = robot.data.joint_pos[:, joint_ids].clone()
             env.step(action)
             step += 1
             if args_cli.print_every > 0 and step % args_cli.print_every == 0:
