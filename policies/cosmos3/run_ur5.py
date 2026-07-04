@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Evaluate the Cosmos3 policy backend on ARX X5 registered tasks."""
+"""Evaluate the Cosmos3 DROID-model backend on UR5e registered tasks."""
 
 import argparse
 import logging
@@ -11,10 +11,10 @@ import traceback
 import cv2  # Must import this before isaaclab. Do not remove
 from isaaclab.app import AppLauncher
 
-POLICY = "cosmos3_x5"
+POLICY = "cosmos3_ur5"
 logger = logging.getLogger(__name__)
 
-parser = argparse.ArgumentParser(description="Evaluate the Cosmos3 policy backend on ARX X5.")
+parser = argparse.ArgumentParser(description="Evaluate the Cosmos3 policy backend on UR5e.")
 parser.add_argument(
     "--remote-host", default="localhost", help="Remote host for policy server (default: localhost)."
 )
@@ -33,22 +33,21 @@ args_cli.enable_cameras = True
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-from policies.cosmos3.client import Cosmos3Client
-from robolab.registrations.x5.auto_env_registrations_jointpos import auto_register_x5_envs
-from robolab.registrations.x5.camera_presets import WRIST_LEFT_RIGHT_HEAD
+from policies.cosmos3.client import Cosmos3UR5Client
+from robolab.registrations.ur5.auto_env_registrations_jointpos import auto_register_ur5_envs
 
-auto_register_x5_envs(task=args_cli.task, cameras=WRIST_LEFT_RIGHT_HEAD)
+auto_register_ur5_envs(task=args_cli.task)
 if clear_task_filter_for_explicit_paths(args_cli):
     logger.debug("Registered explicit task path(s); cleared eval task filter.")
 
 
-def make_client(args: argparse.Namespace) -> Cosmos3Client:
-    """ """
-    return Cosmos3Client(remote_host=args.remote_host, remote_port=args.remote_port)
+def make_client(args: argparse.Namespace) -> Cosmos3UR5Client:
+    """Create a Cosmos3 UR5 adapter client."""
+    return Cosmos3UR5Client(remote_host=args.remote_host, remote_port=args.remote_port)
 
 
 def main() -> None:
-    """ """
+    """Run Cosmos3 UR5 evaluation."""
     run_evaluation(args_cli, policy=POLICY, client_factory=make_client)
     simulation_app.close()
 

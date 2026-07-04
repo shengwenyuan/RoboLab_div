@@ -146,3 +146,69 @@ class Cosmos3Client(InferenceClient):
         wrist = extracted_obs["wrist_image"]
         right = extracted_obs["right_image"]
         return np.concatenate((left, wrist, right), axis=1)
+
+
+def ur5_joint_position_to_droid7(joint_position: np.ndarray) -> np.ndarray:
+    """Pad a UR5 6D joint vector into the Cosmos DROID server's 7D arm state slot."""
+    joint_position = np.asarray(joint_position, dtype=np.float32)
+    if joint_position.shape[-1] != 6:
+        raise ValueError(f"Expected UR5 joint_position last dim 6, got {joint_position.shape}")
+    pad = np.zeros((*joint_position.shape[:-1], 1), dtype=joint_position.dtype)
+    return np.concatenate([joint_position, pad], axis=-1)
+
+
+def droid_action_to_ur5(action: np.ndarray) -> np.ndarray:
+    """Map DROID 7D arm + gripper actions to UR5's 6D joint-position action chunk."""
+    action = np.asarray(action, dtype=np.float32)
+    if action.ndim == 1:
+        action = action[None, ...]
+    if action.shape[-1] < 6:
+        raise ValueError(f"Expected DROID action last dim at least 6, got {action.shape}")
+    return action[..., :6]
+
+
+class Cosmos3UR5Client(Cosmos3Client):
+    """Cosmos3 DROID-model client adapted to UR5e's 6D action space.
+
+    The server remains DROID-shaped. UR5 joint state is padded from 6D to 7D
+    before the request, a zero gripper state is supplied, and the response action
+    is truncated to the first six arm joints. Missing right/wrist cameras are
+    filled with the available left camera so the Cosmos image schema is stable.
+    """
+
+    def _extract_observation(self, raw_obs: dict, *, env_id: int = 0) -> dict:
+        image_obs = raw_obs["image_obs"]
+        left_image = image_obs["over_shoulder_left_camera"][env_id].cpu().numpy()
+        left_image = image_tools.resize_with_pad(left_image, self._image_h, self._image_w)
+
+        right_tensor = image_obs.get("over_shoulder_right_camera")
+        if right_tensor is None:
+            right_image = left_image
+        else:
+            right_image = right_tensor[env_id].cpu().numpy()
+            right_image = image_tools.resize_with_pad(right_image, self._image_h, self._image_w)
+
+        wrist_tensor = image_obs.get("wrist_cam")
+        if wrist_tensor is None:
+            wrist_image = left_image
+        else:
+            wrist_image = wrist_tensor[env_id].cpu().numpy()
+            wrist_image = image_tools.resize_with_pad(wrist_image, self._image_h, self._image_w)
+
+        joint_position = raw_obs["proprio_obs"]["arm_joint_pos"][env_id].cpu().numpy()
+        joint_position = ur5_joint_position_to_droid7(joint_position)
+        gripper_position = np.zeros((1,), dtype=np.float32)
+
+        return {
+            "left_image": left_image,
+            "right_image": right_image,
+            "wrist_image": wrist_image,
+            "joint_position": joint_position,
+            "gripper_position": gripper_position,
+        }
+
+    def _unpack_response(self, response: dict) -> np.ndarray:
+        return droid_action_to_ur5(response["action"])
+
+    def _postprocess_chunk(self, chunk: np.ndarray) -> np.ndarray:
+        return np.nan_to_num(chunk.astype(np.float32, copy=True))
