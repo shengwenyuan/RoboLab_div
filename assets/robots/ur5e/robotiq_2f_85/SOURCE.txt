@@ -1,0 +1,8 @@
+Robotiq 2F-85 URDF/xacro and mesh files copied from the ROS-Industrial attic robotiq repository.
+Repository: https://github.com/ros-industrial-attic/robotiq
+Branch: kinetic-devel
+Package: robotiq_2f_85_gripper_visualization
+Package README: https://github.com/ros-industrial-attic/robotiq/tree/kinetic-devel/robotiq_2f_85_gripper_visualization
+Raw mesh root: https://raw.githubusercontent.com/ros-industrial-attic/robotiq/kinetic-devel/robotiq_2f_85_gripper_visualization/meshes/
+License: BSD, copied locally as LICENSE.BSD-ROS-Industrial-Robotiq.txt.
+Note: This repository is archived/unmaintained and is not the Robotiq manufacturer support portal; it is used here as the public ROS description/mesh source for engineering visualization.

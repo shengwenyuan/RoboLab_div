@@ -26,12 +26,11 @@ ARM_JOINT_NAMES = [
     "wrist_3_joint",
 ]
 
-UR5E_URDF_PATH = os.path.join(ROBOTS_DIR, "ur5e", "ur5e_mesh.urdf")
-UR5E_USD_CACHE_DIR = "/tmp/robolab_ur5e_mesh_v2_usd"
+UR5E_URDF_PATH = os.path.join(ROBOTS_DIR, "ur5e", "ur5e_robotiq_2f_85.urdf")
+UR5E_USD_CACHE_DIR = "/tmp/robolab_ur5e_robotiq_2f_85_usd"
 
-# The mesh URDF keeps the working kinematic chain from ur5e_primitive.urdf while using
-# official Universal Robots UR5e DAE meshes for visuals. Collisions remain primitive for
-# stable contact behavior in the static-scene smoke test.
+# The mesh URDF keeps the working UR5e kinematic chain while using Universal Robots
+# UR5e visual meshes and a fixed-open Robotiq 2F-85 visual/collision gripper.
 
 
 @configclass
@@ -142,4 +141,4 @@ class ProprioceptionObservationCfg(ObsGroup):
         self.concatenate_terms = False
 
 
-contact_gripper = {"gripper": "{ENV_REGEX_NS}/robot/wrist_3_link"}
+contact_gripper = {"gripper": "{ENV_REGEX_NS}/robot/left_inner_finger_pad"}
