@@ -12,7 +12,17 @@ SOURCE_DIR = os.path.dirname(os.path.abspath(__file__)) # robolab/robolab
 
 # Get children of package directory
 DEFAULT_OUTPUT_DIR = os.path.join(PACKAGE_DIR, "output")
-ASSET_DIR = os.path.join(PACKAGE_DIR, "assets")
+ASSET_DIR_ENV_VAR = "ROBOLAB_ASSET_DIR"
+
+
+def _resolve_asset_dir() -> str:
+    asset_dir = os.environ.get(ASSET_DIR_ENV_VAR)
+    if asset_dir:
+        return os.path.abspath(os.path.expanduser(asset_dir))
+    return os.path.join(PACKAGE_DIR, "assets")
+
+
+ASSET_DIR = _resolve_asset_dir()
 BACKGROUND_ASSET_DIR = os.path.join(ASSET_DIR, "backgrounds")
 OBJECT_DIR = os.path.join(ASSET_DIR, "objects")
 FIXTURE_DIR = os.path.join(ASSET_DIR, "fixtures")
@@ -35,7 +45,7 @@ def resolve_catalog_path(relative_path: str) -> str:
     Resolve a relative path from object_catalog.json to an absolute path.
 
     The catalog stores paths relative to PACKAGE_DIR (e.g., 'assets/objects/ycb/banana.usd').
-    This function converts them to absolute paths.
+    This function maps those paths to ASSET_DIR when ROBOLAB_ASSET_DIR is set.
 
     Args:
         relative_path: Path relative to PACKAGE_DIR
@@ -46,6 +56,14 @@ def resolve_catalog_path(relative_path: str) -> str:
     # If already absolute, return as-is
     if os.path.isabs(relative_path):
         return relative_path
+
+    normalized_path = os.path.normpath(relative_path)
+    if normalized_path == "assets":
+        return ASSET_DIR
+
+    assets_prefix = f"assets{os.sep}"
+    if normalized_path.startswith(assets_prefix):
+        return os.path.join(ASSET_DIR, os.path.relpath(normalized_path, "assets"))
 
     return os.path.join(PACKAGE_DIR, relative_path)
 
