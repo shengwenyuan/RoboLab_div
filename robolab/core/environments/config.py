@@ -87,6 +87,7 @@ def generate_task_env_cfg(task_class: Task,
                          render_interval: int,
                          decimation: int,
                          seed: int = 0,
+                         ee_body_name: str | None = None,
                          num_envs: int = 1,
                          eye: tuple[float, float, float] = (1.5, 0.0, 1.0),
                          lookat: tuple[float, float, float] = (0.2, 0.0, 0.0),
@@ -153,6 +154,9 @@ def generate_task_env_cfg(task_class: Task,
             # Set optional events if provided by the task
             if getattr(task_class, 'events', None) is not None:
                 self.events = task_class.events()
+
+            if ee_body_name is not None and self.recorders is not None:
+                self.recorders.record_ee_pose.ee_body_name = ee_body_name
 
             # Must specify this after the scene is set.
             create_contact_sensors(self)

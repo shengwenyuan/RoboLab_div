@@ -7,17 +7,32 @@ import robolab.constants
 from robolab.constants import DEFAULT_TASK_SUBFOLDERS, TASK_DIR
 
 
+def zero_image_like_camera(env, sensor_cfg):
+    import torch
+
+    camera = env.scene.sensors[sensor_cfg.name]
+    return torch.zeros_like(camera.data.output["rgb"])
+
+
 def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity=None, task=None, cameras=None,
                            randomize_background=False, background_seed=None,
                            env_postfix="UR5eJointPosition"):
     """Automatically discover and register tasks with the UR5e robot."""
+    from isaaclab.envs import mdp
+    from isaaclab.managers import ObservationGroupCfg as ObsGroup
+    from isaaclab.managers import ObservationTermCfg as ObsTerm
+    from isaaclab.managers import SceneEntityCfg
+    from isaaclab.sensors import CameraCfg
+    from isaaclab.utils import configclass
     from robolab.core.environments.factory import auto_discover_and_create_cfgs
     from robolab.core.observations.observation_utils import generate_image_obs_from_cameras, generate_obs_cfg
-    from robolab.registrations.ur5.camera_presets import WRIST_LEFT
+    from robolab.registrations.ur5.camera_presets import BERKELEY_EEF, ZeroOverShoulderRightCameraCfg
     from robolab.robots.ur5 import (
         ProprioceptionObservationCfg,
         UR5eCfg,
         UR5eJointPositionActionCfg,
+        UR5eWithWristCameraCfg,
+        WristCameraCfg,
         contact_gripper,
     )
     from robolab.variations.backgrounds import HomeOfficeBackgroundCfg
@@ -25,9 +40,61 @@ def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity
     from robolab.variations.lighting import SphereLightCfg
 
     if cameras is None:
-        cameras = WRIST_LEFT
+        cameras = BERKELEY_EEF
 
-    ImageObsCfg = generate_image_obs_from_cameras(cameras)
+    def _make_image_obs_cfg(camera_cfgs):
+        @configclass
+        class ImageObsCfg(ObsGroup):
+            """UR5 image observations, including optional synthetic missing-view slots."""
+
+            def __post_init__(self) -> None:
+                self.enable_corruption = False
+                self.concatenate_terms = False
+
+        for camera_cfg in camera_cfgs:
+            if camera_cfg is ZeroOverShoulderRightCameraCfg:
+                camera_name = "over_shoulder_right_camera"
+                if hasattr(ImageObsCfg, camera_name):
+                    raise ValueError("Zero right camera cannot be combined with a physical right camera")
+                setattr(
+                    ImageObsCfg,
+                    camera_name,
+                    ObsTerm(
+                        func=zero_image_like_camera,
+                        params={"sensor_cfg": SceneEntityCfg("over_shoulder_left_camera")},
+                    ),
+                )
+                continue
+
+            camera_cfg_instance = camera_cfg()
+            for attr_name in dir(camera_cfg_instance):
+                if attr_name.startswith("_"):
+                    continue
+                attr_value = getattr(camera_cfg_instance, attr_name)
+                if not isinstance(attr_value, CameraCfg):
+                    continue
+                if hasattr(ImageObsCfg, attr_name):
+                    raise ValueError(f"Duplicate image observation camera: {attr_name}")
+                setattr(
+                    ImageObsCfg,
+                    attr_name,
+                    ObsTerm(
+                        func=mdp.observations.image,
+                        params={
+                            "sensor_cfg": SceneEntityCfg(attr_name),
+                            "data_type": "rgb",
+                            "normalize": False,
+                        },
+                    ),
+                )
+        return ImageObsCfg
+
+    real_cameras = [camera for camera in cameras if camera is not ZeroOverShoulderRightCameraCfg]
+    has_wrist_camera = any(camera is WristCameraCfg for camera in real_cameras)
+    robot_cfg = UR5eWithWristCameraCfg if has_wrist_camera else UR5eCfg
+    scene_cameras = [camera for camera in real_cameras if camera is not WristCameraCfg]
+
+    ImageObsCfg = _make_image_obs_cfg(cameras)
     ViewportCameraCfg = generate_image_obs_from_cameras([EgocentricMirroredCameraCfg])
 
     ObservationCfg = generate_obs_cfg({
@@ -64,11 +131,12 @@ def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity
         env_postfix=env_postfix,
         observations_cfg=ObservationCfg(),
         actions_cfg=UR5eJointPositionActionCfg(),
-        robot_cfg=UR5eCfg,
-        camera_cfg=[*cameras, EgocentricMirroredCameraCfg],
+        robot_cfg=robot_cfg,
+        camera_cfg=[*scene_cameras, EgocentricMirroredCameraCfg],
         lighting_cfg=SphereLightCfg,
         background_cfg=background_cfg,
         contact_gripper=contact_gripper,
+        ee_body_name="tool0",
         dt=1 / (60 * 2),
         render_interval=8,
         decimation=8,

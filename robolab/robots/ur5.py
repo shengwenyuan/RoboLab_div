@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from collections.abc import Sequence
 
 import isaaclab.envs.mdp as mdp
@@ -10,27 +9,47 @@ import torch
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 from isaaclab.envs import ManagerBasedRLEnv
+from isaaclab.envs.mdp.actions.actions_cfg import BinaryJointPositionActionCfg
+from isaaclab.envs.mdp.actions.binary_joint_actions import BinaryJointPositionAction
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.sensors import TiledCameraCfg
 from isaaclab.utils import configclass
 
-from robolab.constants import ROBOTS_DIR
+from robolab.robots.ur5_profile import ARM_JOINT_NAMES, GRIPPER_JOINT_NAMES, UR5E_URDF_PATH
 
-ARM_JOINT_NAMES = [
-    "shoulder_pan_joint",
-    "shoulder_lift_joint",
-    "elbow_joint",
-    "wrist_1_joint",
-    "wrist_2_joint",
-    "wrist_3_joint",
+UR5E_USD_CACHE_DIR = "/tmp/robolab_ur5e_robotiq_2f_85_articulated_usd"
+GRIPPER_OPEN_POS = 0.0
+GRIPPER_CLOSED_POS = 0.8
+GRIPPER_MIMIC_JOINT_NAMES = [
+    "right_outer_knuckle_joint",
+    "left_inner_knuckle_joint",
+    "right_inner_knuckle_joint",
+    "left_inner_finger_joint",
+    "right_inner_finger_joint",
 ]
 
-UR5E_URDF_PATH = os.path.join(ROBOTS_DIR, "ur5e", "ur5e_robotiq_2f_85.urdf")
-UR5E_USD_CACHE_DIR = "/tmp/robolab_ur5e_robotiq_2f_85_usd"
-
 # The mesh URDF keeps the working UR5e kinematic chain while using Universal Robots
-# UR5e visual meshes and a fixed-open Robotiq 2F-85 visual/collision gripper.
+# UR5e visual meshes and an actuated Robotiq 2F-85 gripper.
+# Wrist camera in Berkeley-autolab dataset style
+_WRIST_CAM = TiledCameraCfg(
+    prim_path="{ENV_REGEX_NS}/robot/tool0/wrist_cam",
+    height=720,
+    width=1280,
+    data_types=["rgb"],
+    spawn=sim_utils.PinholeCameraCfg(
+        focal_length=3.2,
+        focus_distance=28.0,
+        horizontal_aperture=5.376,
+        vertical_aperture=3.024,
+    ),
+    offset=TiledCameraCfg.OffsetCfg(
+        pos=(0.0, -0.11, 0.045),
+        rot=(-0.1298897385, -0.0033445545, 0.9911942669, -0.0255224411),
+        convention="opengl",
+    ),
+)
 
 
 @configclass
@@ -69,6 +88,7 @@ class UR5eCfg:
                 "wrist_1_joint": -1.57,
                 "wrist_2_joint": -1.57,
                 "wrist_3_joint": 0.0,
+                "finger_joint": GRIPPER_OPEN_POS,
             },
         ),
         soft_joint_pos_limit_factor=1,
@@ -80,11 +100,34 @@ class UR5eCfg:
                 stiffness=800.0,
                 damping=40.0,
             ),
+            "gripper": ImplicitActuatorCfg(
+                joint_names_expr=[*GRIPPER_JOINT_NAMES, *GRIPPER_MIMIC_JOINT_NAMES],
+                effort_limit_sim=1000.0,
+                velocity_limit_sim=2.0,
+                stiffness=2000.0,
+                damping=100.0,
+            ),
         },
     )
 
 
+
+
+class UR5eWithWristCameraCfg:
+    """UR5e robot cfg variant with a robot-mounted wrist camera sensor."""
+
+    robot = UR5eCfg().robot
+    wrist_cam = _WRIST_CAM
+
+
 UR5Cfg = UR5eCfg
+
+
+@configclass
+class WristCameraCfg:
+    """Introspection wrapper for the UR5 wrist camera observation term."""
+
+    wrist_cam = _WRIST_CAM
 
 
 def _joint_indices(robot, joint_names: Sequence[str]) -> list[int]:
@@ -103,6 +146,14 @@ def arm_joint_pos(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntit
     return robot.data.joint_pos[:, _joint_indices(robot, ARM_JOINT_NAMES)]
 
 
+def gripper_pos(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Returns gripper position as 0 for open and 1 for closed."""
+    robot = env.scene[asset_cfg.name]
+    joint_pos = robot.data.joint_pos[:, _joint_indices(robot, GRIPPER_JOINT_NAMES)]
+    closed_pos = (joint_pos - GRIPPER_OPEN_POS) / (GRIPPER_CLOSED_POS - GRIPPER_OPEN_POS)
+    return torch.clamp(closed_pos.mean(dim=1, keepdim=True), 0.0, 1.0)
+
+
 def ee_pos(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     """Returns the UR tool frame position in the env-local frame."""
     robot = env.scene[asset_cfg.name]
@@ -117,6 +168,24 @@ def ee_quat(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("
     return robot.data.body_quat_w[:, body_idx, :]
 
 
+class BinaryJointPositionZeroToOneAction(BinaryJointPositionAction):
+    def process_actions(self, actions: torch.Tensor):
+        self._raw_actions[:] = actions
+        close_mask = actions if actions.dtype == torch.bool else actions > 0.5
+        self._processed_actions = torch.where(close_mask, self._close_command, self._open_command)
+        if self.cfg.clip is not None:
+            self._processed_actions = torch.clamp(
+                self._processed_actions,
+                min=self._clip[:, :, 0],
+                max=self._clip[:, :, 1],
+            )
+
+
+@configclass
+class BinaryJointPositionZeroToOneActionCfg(BinaryJointPositionActionCfg):
+    class_type = BinaryJointPositionZeroToOneAction
+
+
 @configclass
 class UR5eJointPositionActionCfg:
     body = mdp.JointPositionActionCfg(
@@ -126,6 +195,13 @@ class UR5eJointPositionActionCfg:
         use_default_offset=False,
     )
 
+    finger_joint = BinaryJointPositionZeroToOneActionCfg(
+        asset_name="robot",
+        joint_names=GRIPPER_JOINT_NAMES,
+        open_command_expr={joint_name: GRIPPER_OPEN_POS for joint_name in GRIPPER_JOINT_NAMES},
+        close_command_expr={joint_name: GRIPPER_CLOSED_POS for joint_name in GRIPPER_JOINT_NAMES},
+    )
+
 
 UR5JointPositionActionCfg = UR5eJointPositionActionCfg
 
@@ -133,6 +209,7 @@ UR5JointPositionActionCfg = UR5eJointPositionActionCfg
 @configclass
 class ProprioceptionObservationCfg(ObsGroup):
     arm_joint_pos = ObsTerm(func=arm_joint_pos)
+    gripper_pos = ObsTerm(func=gripper_pos, clip=(0, 1))
     ee_pos = ObsTerm(func=ee_pos)
     ee_quat = ObsTerm(func=ee_quat)
 
