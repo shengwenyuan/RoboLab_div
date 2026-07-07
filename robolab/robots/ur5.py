@@ -22,15 +22,6 @@ from robolab.robots.ur5_profile import ARM_JOINT_NAMES, GRIPPER_JOINT_NAMES, UR5
 UR5E_USD_CACHE_DIR = "/tmp/robolab_ur5e_robotiq_2f_85_articulated_usd"
 GRIPPER_OPEN_POS = 0.0
 GRIPPER_CLOSED_POS = 0.8
-UR5E_HOME_JOINT_POS = {
-    "shoulder_pan_joint": 0.0,
-    "shoulder_lift_joint": -1.57079632679,
-    "elbow_joint": 1.57079632679,
-    "wrist_1_joint": -1.57079632679,
-    "wrist_2_joint": -1.57079632679,
-    "wrist_3_joint": 1.57079632679,
-    "finger_joint": GRIPPER_OPEN_POS,
-}
 GRIPPER_MIMIC_JOINT_NAMES = [
     "right_outer_knuckle_joint",
     "left_inner_knuckle_joint",
@@ -38,6 +29,20 @@ GRIPPER_MIMIC_JOINT_NAMES = [
     "left_inner_finger_joint",
     "right_inner_finger_joint",
 ]
+GRIPPER_ACTION_JOINT_NAMES = [*GRIPPER_JOINT_NAMES, *GRIPPER_MIMIC_JOINT_NAMES]
+GRIPPER_OPEN_COMMAND = {joint_name: GRIPPER_OPEN_POS for joint_name in GRIPPER_ACTION_JOINT_NAMES}
+GRIPPER_CLOSE_COMMAND = {joint_name: GRIPPER_CLOSED_POS for joint_name in GRIPPER_ACTION_JOINT_NAMES}
+for joint_name in ("left_inner_finger_joint", "right_inner_finger_joint"):
+    GRIPPER_CLOSE_COMMAND[joint_name] = -GRIPPER_CLOSED_POS
+UR5E_HOME_JOINT_POS = {
+    "shoulder_pan_joint": 0.0,
+    "shoulder_lift_joint": -1.57079632679,
+    "elbow_joint": 1.57079632679,
+    "wrist_1_joint": -1.57079632679,
+    "wrist_2_joint": -1.57079632679,
+    "wrist_3_joint": 1.57079632679,
+    **GRIPPER_OPEN_COMMAND,
+}
 
 # The mesh URDF keeps the working UR5e kinematic chain while using Universal Robots
 # UR5e visual meshes and an actuated Robotiq 2F-85 gripper.
@@ -73,6 +78,7 @@ class UR5eCfg:
             fix_base=True,
             root_link_name="base_link",
             merge_fixed_joints=False,
+            self_collision=True,
             joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
                 gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=800.0, damping=40.0)
             ),
@@ -82,7 +88,7 @@ class UR5eCfg:
                 max_depenetration_velocity=5.0,
             ),
             articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-                enabled_self_collisions=False,
+                enabled_self_collisions=True,
                 solver_position_iteration_count=32,
                 solver_velocity_iteration_count=1,
             ),
@@ -102,7 +108,7 @@ class UR5eCfg:
                 damping=40.0,
             ),
             "gripper": ImplicitActuatorCfg(
-                joint_names_expr=[*GRIPPER_JOINT_NAMES, *GRIPPER_MIMIC_JOINT_NAMES],
+                joint_names_expr=GRIPPER_ACTION_JOINT_NAMES,
                 effort_limit_sim=1000.0,
                 velocity_limit_sim=2.0,
                 stiffness=2000.0,
@@ -198,9 +204,11 @@ class UR5eJointPositionActionCfg:
 
     finger_joint = BinaryJointPositionZeroToOneActionCfg(
         asset_name="robot",
-        joint_names=GRIPPER_JOINT_NAMES,
-        open_command_expr={joint_name: GRIPPER_OPEN_POS for joint_name in GRIPPER_JOINT_NAMES},
-        close_command_expr={joint_name: GRIPPER_CLOSED_POS for joint_name in GRIPPER_JOINT_NAMES},
+        # Keep the environment action contract at one gripper scalar, while
+        # applying the command to the full Robotiq mechanism.
+        joint_names=GRIPPER_ACTION_JOINT_NAMES,
+        open_command_expr=GRIPPER_OPEN_COMMAND,
+        close_command_expr=GRIPPER_CLOSE_COMMAND,
     )
 
 
