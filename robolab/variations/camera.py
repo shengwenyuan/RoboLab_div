@@ -170,3 +170,24 @@ class EgocentricMirroredCameraCfg:
         convention="opengl"
     ),
 )
+
+
+@configclass
+class BerkeleyUR5LeftCameraCfg:
+    """UR5 Berkeley-style left over-shoulder camera with tighter framing."""
+
+    over_shoulder_left_camera = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/over_shoulder_left_camera",
+        height=720,
+        width=1280,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=3.7,
+            focus_distance=28.0,
+            horizontal_aperture=5.376,
+            vertical_aperture=3.024,
+        ),
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=(0.05, 0.57, 0.52), rot=(-0.393, -0.195, 0.399, 0.805), convention="opengl"
+        ),
+    )

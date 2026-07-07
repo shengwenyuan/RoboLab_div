@@ -5,6 +5,7 @@
 
 from robolab.robots.ur5 import WristCameraCfg
 from robolab.variations.camera import (
+    BerkeleyUR5LeftCameraCfg,
     HeadCameraCfg,
     OverShoulderLeftCameraCfg,
     OverShoulderRightCameraCfg,
@@ -30,7 +31,7 @@ WRIST_LEFT_RIGHT_HEAD = [OverShoulderLeftCameraCfg, OverShoulderRightCameraCfg, 
 
 # Berkeley policy input is external+wrist+zero. The head camera is kept in image_obs
 # so saved sensor videos retain a DROID-style global panel.
-BERKELEY_EEF = [OverShoulderLeftCameraCfg, ZeroOverShoulderRightCameraCfg, HeadCameraCfg, WristCameraCfg]
+BERKELEY_EEF = [BerkeleyUR5LeftCameraCfg, ZeroOverShoulderRightCameraCfg, HeadCameraCfg, WristCameraCfg]
 
 CAMERA_PRESETS = {
     "berkeley_eef": BERKELEY_EEF,
