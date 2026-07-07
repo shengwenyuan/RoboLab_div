@@ -48,15 +48,15 @@ _WRIST_CAM = TiledCameraCfg(
     width=1280,
     data_types=["rgb"],
     spawn=sim_utils.PinholeCameraCfg(
-        focal_length=3.2,
+        focal_length=5.3,
         focus_distance=28.0,
         horizontal_aperture=5.376,
         vertical_aperture=3.024,
     ),
     offset=TiledCameraCfg.OffsetCfg(
-        pos=(0.0, -0.11, 0.045),
-        rot=(-0.1298897385, -0.0033445545, 0.9911942669, -0.0255224411),
-        convention="opengl",
+        pos=(-0.19, 0.0, -0.005),
+        rot=(-0.270598, 0.6532815, 0.6532815, -0.270598), # w, x, y, z
+        convention="opengl",    
     ),
 )
 
