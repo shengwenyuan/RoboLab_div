@@ -22,6 +22,15 @@ from robolab.robots.ur5_profile import ARM_JOINT_NAMES, GRIPPER_JOINT_NAMES, UR5
 UR5E_USD_CACHE_DIR = "/tmp/robolab_ur5e_robotiq_2f_85_articulated_usd"
 GRIPPER_OPEN_POS = 0.0
 GRIPPER_CLOSED_POS = 0.8
+UR5E_HOME_JOINT_POS = {
+    "shoulder_pan_joint": 0.0,
+    "shoulder_lift_joint": -1.57079632679,
+    "elbow_joint": 1.57079632679,
+    "wrist_1_joint": -1.57079632679,
+    "wrist_2_joint": -1.57079632679,
+    "wrist_3_joint": 1.57079632679,
+    "finger_joint": GRIPPER_OPEN_POS,
+}
 GRIPPER_MIMIC_JOINT_NAMES = [
     "right_outer_knuckle_joint",
     "left_inner_knuckle_joint",
@@ -81,15 +90,7 @@ class UR5eCfg:
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0, 0, 0),
             rot=(1, 0, 0, 0),
-            joint_pos={
-                "shoulder_pan_joint": 0.0,
-                "shoulder_lift_joint": -1.57,
-                "elbow_joint": 1.57,
-                "wrist_1_joint": -1.57,
-                "wrist_2_joint": -1.57,
-                "wrist_3_joint": 0.0,
-                "finger_joint": GRIPPER_OPEN_POS,
-            },
+            joint_pos=UR5E_HOME_JOINT_POS.copy(),
         ),
         soft_joint_pos_limit_factor=1,
         actuators={

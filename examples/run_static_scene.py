@@ -5,6 +5,7 @@
 """Launch one RoboLab task scene and hold the robot still for live viewing."""
 
 import argparse
+import os
 import sys
 import traceback
 
@@ -52,6 +53,8 @@ parser.add_argument("--print-every", type=int, default=120, help="Print a heartb
 AppLauncher.add_app_launcher_args(parser)
 
 args_cli, _ = parser.parse_known_args()
+runtime_livestream = args_cli.livestream if args_cli.livestream >= 0 else int(os.environ.get("LIVESTREAM", "0"))
+runtime_headless = bool(args_cli.headless or runtime_livestream > 0 or int(os.environ.get("HEADLESS", "0")))
 args_cli.enable_cameras = True
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -168,17 +171,40 @@ def main() -> None:
         robot = env.scene["robot"]
         print(f"[RoboLab] Static scene ready: {env_name}", flush=True)
         print(f"[RoboLab] Instruction: {env_cfg.instruction}", flush=True)
+        if args_cli.robot == "ur5e":
+            initial_arm_joints = {
+                name: round(float(robot.data.joint_pos[0, robot.data.joint_names.index(name)].cpu()), 5)
+                for name in UR5_ARM_JOINT_NAMES
+            }
+            print(f"[RoboLab] Initial arm joints: {initial_arm_joints}", flush=True)
         print("[RoboLab] Holding current joint positions. Stop with Ctrl+C or close the viewer.", flush=True)
 
+        def should_keep_running(step: int) -> bool:
+            if args_cli.num_steps >= 0 and step >= args_cli.num_steps:
+                return False
+            if runtime_livestream > 0:
+                return True
+            if runtime_headless and args_cli.num_steps >= 0:
+                return True
+            return simulation_app.is_running()
+
+        print(
+            f"[RoboLab] Keepalive: headless={runtime_headless} "
+            f"livestream={runtime_livestream} num_steps={args_cli.num_steps}",
+            flush=True,
+        )
+
         step = 0
-        while simulation_app.is_running() and (args_cli.num_steps < 0 or step < args_cli.num_steps):
+        while should_keep_running(step):
             if args_cli.robot == "droid":
                 arm_action = robot.data.joint_pos[:, :7].clone()
                 gripper_action = torch.full((env.num_envs, 1), args_cli.gripper, device=env.device)
                 action = torch.cat([arm_action, gripper_action], dim=1)
             else:
                 joint_ids = [robot.data.joint_names.index(name) for name in UR5_ARM_JOINT_NAMES]
-                action = robot.data.joint_pos[:, joint_ids].clone()
+                arm_action = robot.data.joint_pos[:, joint_ids].clone()
+                gripper_action = torch.full((env.num_envs, 1), args_cli.gripper, device=env.device)
+                action = torch.cat([arm_action, gripper_action], dim=1)
             env.step(action)
             step += 1
             if args_cli.print_every > 0 and step % args_cli.print_every == 0:

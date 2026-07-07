@@ -244,9 +244,9 @@ class Cosmos3UR5Client(Cosmos3Client):
 
     def _compose_canvas(self, left_image: np.ndarray, wrist_image: np.ndarray, right_image: np.ndarray) -> np.ndarray:
         size = (self._image_h // 2, self._image_w // 2)
-        wrist = self._resize_for_canvas(wrist_image, size=size, dtype=left_image.dtype)
-        right = self._resize_for_canvas(right_image, size=size, dtype=left_image.dtype)
-        return np.concatenate((left_image, np.concatenate((wrist, right), axis=1)), axis=0)
+        left = self._resize_for_canvas(left_image, size=size, dtype=wrist_image.dtype)
+        right = np.zeros_like(left)
+        return np.concatenate((wrist_image, np.concatenate((left, right), axis=1)), axis=0)
 
     def _extract_observation(self, raw_obs: dict, *, env_id: int = 0) -> dict:
         image_obs = raw_obs["image_obs"]
