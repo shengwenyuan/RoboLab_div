@@ -62,6 +62,7 @@ include = ["robolab", "robolab.*", "policies", "policies.*", "dashboard", "dashb
 
 [tool.setuptools.package-data]
 dashboard = ["templates/*.html", "static/*"]
+robolab = ["core/motion/curobo/configs/*.yml"]
 
 # -- uv configuration --
 

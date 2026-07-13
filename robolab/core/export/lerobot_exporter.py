@@ -75,6 +75,27 @@ except ImportError:
     HAS_PYARROW = False
 
 
+def _attr_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
+
+
+def _frame_array(value: np.ndarray, *, num_samples: int, width: int | None = None) -> np.ndarray | None:
+    arr = np.asarray(value, dtype=np.float32)
+    if arr.ndim == 3 and arr.shape[1] == 1:
+        arr = arr[:, 0, :]
+    if arr.ndim == 1 and width is not None and arr.size % width == 0:
+        arr = arr.reshape((-1, width))
+    if arr.ndim != 2:
+        return None
+    if width is not None and arr.shape[1] != width:
+        return None
+    return arr[:num_samples]
+
+
 class LeRobotExporter:
     """Converts RoboLab HDF5 output to LeRobot v3.0 format."""
 
@@ -86,6 +107,8 @@ class LeRobotExporter:
         fps: float = 15.0,
         repo_id: str | None = None,
         concatenate_videos: bool = True,
+        skip_video_export: bool = False,
+        skip_image_stats: bool = False,
     ):
         """Initialize the LeRobot exporter.
 
@@ -100,6 +123,10 @@ class LeRobotExporter:
             concatenate_videos: If True (default), merge all episode videos per camera
                 into one MP4 (v3 convention). If False, write one MP4 per episode
                 (file-000.mp4, file-001.mp4, ...); still v3, no ffmpeg needed.
+            skip_video_export: If True, do not copy/re-encode videos; register existing
+                files already present in the LeRobot output directory.
+            skip_image_stats: If True, write placeholder image statistics instead of
+                sampling frames from videos. Useful on memory-constrained batch exports.
         """
         if not HAS_PYARROW:
             raise ImportError(
@@ -114,6 +141,8 @@ class LeRobotExporter:
         self.fps = fps
         self.repo_id = repo_id or f"robolab/{self.robolab_dir.name}"
         self.concatenate_videos = concatenate_videos
+        self.skip_video_export = skip_video_export
+        self.skip_image_stats = skip_image_stats
 
         # Statistics accumulators
         self._stats: dict[str, dict[str, list]] = {}
@@ -129,6 +158,7 @@ class LeRobotExporter:
         self._video_files: list[tuple[str, str, int]] = []  # (camera, src_path, episode_idx)
         # After building concatenated videos: (camera_name, episode_idx) -> (file_index, from_ts, to_ts)
         self._video_timestamps: dict[tuple[str, int], tuple[int, float, float]] = {}
+        self._camera_calibration: dict[str, Any] = {}
 
     def export(self) -> Path:
         """Export RoboLab data to LeRobot v3.0 format.
@@ -160,6 +190,7 @@ class LeRobotExporter:
         self._write_tasks()
         self._write_stats()
         self._write_info()
+        self._write_camera_calibration()
 
         print(f"[LeRobotExporter] Export complete: {self.lerobot_dir}")
         return self.lerobot_dir
@@ -232,6 +263,9 @@ class LeRobotExporter:
             for demo_name in demo_names:
                 demo_group = data_group[demo_name]
                 episode_idx = len(self._episodes_metadata)
+                episode_metadata = self._load_episode_metadata(task_dir, demo_name)
+                if isinstance(episode_metadata.get("camera_calibration"), dict):
+                    self._camera_calibration.update(episode_metadata["camera_calibration"])
 
                 # Extract episode data
                 episode_data = self._extract_episode_data(demo_group, task_name)
@@ -241,7 +275,8 @@ class LeRobotExporter:
                     self._find_episode_videos(task_dir, episode_idx, demo_name, run_idx=run_idx)
 
                     # Get task info
-                    task_idx = self._get_or_create_task(task_name)
+                    instruction = _attr_text(demo_group.attrs.get("prompt")) or episode_metadata.get("prompt")
+                    task_idx = self._get_or_create_task(task_name, instruction=instruction)
 
                     # Add episode metadata (tasks = instruction list, for compatibility with HF/LeRobot visualizer)
                     num_frames = len(episode_data)
@@ -291,7 +326,7 @@ class LeRobotExporter:
         # Extract actions
         actions = None
         if "actions" in demo_group:
-            actions = np.array(demo_group["actions"])
+            actions = _frame_array(np.array(demo_group["actions"]), num_samples=num_samples)
 
         # Extract robot joint states
         joint_positions = None
@@ -299,9 +334,9 @@ class LeRobotExporter:
         if "states" in demo_group and "articulation" in demo_group["states"]:
             robot_states = demo_group["states"]["articulation"].get("robot", {})
             if "joint_position" in robot_states:
-                joint_positions = np.array(robot_states["joint_position"])
+                joint_positions = _frame_array(np.array(robot_states["joint_position"]), num_samples=num_samples)
             if "joint_velocity" in robot_states:
-                joint_velocities = np.array(robot_states["joint_velocity"])
+                joint_velocities = _frame_array(np.array(robot_states["joint_velocity"]), num_samples=num_samples)
 
         # Extract end-effector pose if available
         ee_position = None
@@ -309,9 +344,23 @@ class LeRobotExporter:
         if "ee_pose" in demo_group:
             ee_group = demo_group["ee_pose"]
             if "position" in ee_group:
-                ee_position = np.array(ee_group["position"])
+                ee_position = _frame_array(np.array(ee_group["position"]), num_samples=num_samples, width=3)
             if "orientation" in ee_group:
-                ee_orientation = np.array(ee_group["orientation"])
+                ee_orientation = _frame_array(np.array(ee_group["orientation"]), num_samples=num_samples, width=4)
+
+        action_joint_position = None
+        action_tool0_pose = None
+        action_desc = demo_group.get("action_descriptions")
+        if action_desc is not None:
+            if "joint_position" in action_desc:
+                action_joint_position = _frame_array(np.array(action_desc["joint_position"]), num_samples=num_samples)
+            if "tool0_pose_wxyz" in action_desc:
+                action_tool0_pose = _frame_array(np.array(action_desc["tool0_pose_wxyz"]), num_samples=num_samples, width=7)
+        if action_joint_position is None:
+            action_joint_position = joint_positions
+        if action_tool0_pose is None and ee_position is not None and ee_orientation is not None:
+            common = min(len(ee_position), len(ee_orientation), num_samples)
+            action_tool0_pose = np.concatenate([ee_position[:common], ee_orientation[:common]], axis=1)
 
         # Build rows
         for i in range(num_samples):
@@ -320,6 +369,10 @@ class LeRobotExporter:
             # Actions (required for LeRobot)
             if actions is not None and i < len(actions):
                 row["action"] = actions[i].tolist()
+            if action_joint_position is not None and i < len(action_joint_position):
+                row["action.joint_position"] = action_joint_position[i].tolist()
+            if action_tool0_pose is not None and i < len(action_tool0_pose):
+                row["action.tool0_pose"] = action_tool0_pose[i].tolist()
 
             # Observation state (joint positions are commonly used)
             if joint_positions is not None and i < len(joint_positions):
@@ -338,6 +391,24 @@ class LeRobotExporter:
             rows.append(row)
 
         return rows
+
+    def _load_episode_metadata(self, task_dir: Path, demo_name: str) -> dict[str, Any]:
+        demo_num = int(demo_name.split("_")[1])
+        candidates = [
+            task_dir / f"episode_{demo_num:06d}" / "metadata.json",
+            task_dir / "metadata.json",
+        ]
+        for path in candidates:
+            if not path.exists():
+                continue
+            try:
+                with path.open() as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+            except (json.JSONDecodeError, OSError):
+                continue
+        return {}
 
     def _get_instruction_for_task(self, task_name: str) -> str:
         """Get or generate a language instruction for a task.
@@ -558,6 +629,16 @@ class LeRobotExporter:
                 if 0 <= ep_idx < len(self._episodes_metadata):
                     total_count += self._episodes_metadata[ep_idx]["length"]
 
+            if self.skip_image_stats:
+                result[camera_name] = {
+                    "min": [[[0.0]], [[0.0]], [[0.0]]],
+                    "max": [[[1.0]], [[1.0]], [[1.0]]],
+                    "mean": [[[0.5]], [[0.5]], [[0.5]]],
+                    "std": [[[0.5]], [[0.5]], [[0.5]]],
+                    "count": [total_count],
+                }
+                continue
+
             all_pixels = []  # list of (H, W, 3) arrays, normalized 0-1
             for src_path, _ in videos:
                 path = Path(src_path)
@@ -606,9 +687,9 @@ class LeRobotExporter:
 
         return result
 
-    def _get_or_create_task(self, task_name: str) -> int:
+    def _get_or_create_task(self, task_name: str, instruction: str | None = None) -> int:
         """Get task index, creating new task entry if needed."""
-        instruction = self._get_instruction_for_task(task_name)
+        instruction = instruction or self._get_instruction_for_task(task_name)
 
         for i, task in enumerate(self._tasks):
             if task["task"] == instruction:
@@ -899,6 +980,7 @@ class LeRobotExporter:
             "features": features,
             "data_files_size_in_mb": 100,
             "video_files_size_in_mb": 500,
+            "camera_calibration_path": "meta/cameras.json" if self._camera_calibration else None,
         }
 
         output_path = self.lerobot_dir / "meta" / "info.json"
@@ -906,18 +988,29 @@ class LeRobotExporter:
             json.dump(info, f, indent=2)
         print(f"  Wrote info.json")
 
+    def _write_camera_calibration(self):
+        """Write fixed camera intrinsics/extrinsics collected from episode metadata."""
+        if not self._camera_calibration:
+            return
+        output_path = self.lerobot_dir / "meta" / "cameras.json"
+        with open(output_path, "w") as f:
+            json.dump(self._camera_calibration, f, indent=2, sort_keys=True)
+        print(f"  Wrote camera calibration for {len(self._camera_calibration)} cameras")
+
     def _get_feature_names(self, key: str, length: int) -> dict | list | None:
         """Get human-readable names for feature dimensions."""
-        if "joint" in key.lower() or key == "observation.state":
-            return {"motors": [f"joint_{i}" for i in range(length)]}
-        elif key == "action":
-            # Typical robot action: 6 DOF arm + gripper
+        if key == "action.tool0_pose":
             if length == 7:
-                return {"motors": ["x", "y", "z", "rx", "ry", "rz", "gripper"]}
+                return ["x", "y", "z", "qw", "qx", "qy", "qz"]
+        elif key == "action":
+            if length == 7:
+                return {"motors": ["shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3", "gripper_close"]}
             elif length == 8:
                 return {"motors": ["j0", "j1", "j2", "j3", "j4", "j5", "j6", "gripper"]}
             else:
                 return {"motors": [f"action_{i}" for i in range(length)]}
+        elif "joint" in key.lower() or key == "observation.state":
+            return {"motors": [f"joint_{i}" for i in range(length)]}
         elif "position" in key.lower():
             if length == 3:
                 return ["x", "y", "z"]
@@ -945,7 +1038,9 @@ class LeRobotExporter:
             camera_dir = self.lerobot_dir / "videos" / camera_name / "chunk-000"
             camera_dir.mkdir(parents=True, exist_ok=True)
             dst_path = camera_dir / f"file-{episode_idx:03d}.mp4"
-            if self._reencode_to_avc1(path, dst_path):
+            if self.skip_video_export and dst_path.exists():
+                duration = self._get_video_duration_seconds(dst_path)
+            elif self._reencode_to_avc1(path, dst_path):
                 duration = self._get_video_duration_seconds(dst_path)
             else:
                 shutil.copy2(path, dst_path)
