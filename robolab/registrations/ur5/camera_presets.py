@@ -3,6 +3,8 @@
 
 """UR5-specific camera preset bundles for policy image observations."""
 
+from dataclasses import dataclass
+
 from robolab.robots.ur5 import WristCameraCfg
 from robolab.variations.camera import (
     BerkeleyUR5LeftCameraCfg,
@@ -32,9 +34,11 @@ WRIST_LEFT_RIGHT_HEAD = [OverShoulderLeftCameraCfg, OverShoulderRightCameraCfg, 
 # Berkeley policy input is external+wrist+zero. The head camera is kept in image_obs
 # so saved sensor videos retain a DROID-style global panel.
 BERKELEY_EEF = [BerkeleyUR5LeftCameraCfg, ZeroOverShoulderRightCameraCfg, HeadCameraCfg, WristCameraCfg]
+ROBOMIND_SINGLE = [HeadCameraCfg]
 
 CAMERA_PRESETS = {
     "berkeley_eef": BERKELEY_EEF,
+    "robomind_single": ROBOMIND_SINGLE,
     "left": LEFT,
     "right": RIGHT,
     "left_right": LEFT_RIGHT,
@@ -46,8 +50,80 @@ CAMERA_PRESETS = {
 }
 
 
+@dataclass(frozen=True)
+class Cosmos3CameraPreset:
+    """Physical cameras plus the canvas semantics they can satisfy."""
+
+    cameras: tuple[type, ...]
+    layout_id: str
+    view_roles: tuple[str, ...]
+    role_sources: dict[str, str | None]
+    missing_view_policies: tuple[str, ...]
+    view_shape_hw: tuple[int, int] = (360, 640)
+    canvas_shape_hw: tuple[int, int] = (540, 640)
+    viewpoint: str = "concat_view"
+
+    def observation_metadata(self) -> dict[str, object]:
+        return {
+            "layout_id": self.layout_id,
+            "view_shape_hw": self.view_shape_hw,
+            "canvas_shape_hw": self.canvas_shape_hw,
+            "view_roles": self.view_roles,
+            "role_sources": self.role_sources,
+            "missing_view_policies": self.missing_view_policies,
+            "viewpoint": self.viewpoint,
+        }
+
+
+_THREE_REAL_VIEWS = {
+    "layout_id": "primary_top_aux_bottom_pair",
+    "view_roles": ("primary", "aux_left", "aux_right"),
+    "role_sources": {
+        "primary": "wrist_cam",
+        "aux_left": "over_shoulder_left_camera",
+        "aux_right": "over_shoulder_right_camera",
+    },
+    "missing_view_policies": ("error", "black"),
+}
+
+COSMOS3_CAMERA_PRESETS = {
+    "berkeley_eef": Cosmos3CameraPreset(
+        cameras=tuple(BERKELEY_EEF),
+        layout_id="primary_top_aux_bottom_pair_right_missing",
+        view_roles=("primary", "aux_left", "aux_right"),
+        role_sources={
+            "primary": "wrist_cam",
+            "aux_left": "over_shoulder_left_camera",
+            "aux_right": None,
+        },
+        missing_view_policies=("black",),
+    ),
+    "robomind_single": Cosmos3CameraPreset(
+        cameras=tuple(ROBOMIND_SINGLE),
+        layout_id="primary_top_aux_bottom_pair",
+        view_roles=("primary", "aux_left", "aux_right"),
+        role_sources={
+            "primary": "head_camera",
+            "aux_left": None,
+            "aux_right": None,
+        },
+        missing_view_policies=("black",),
+    ),
+    "wrist_left_right": Cosmos3CameraPreset(cameras=tuple(WRIST_LEFT_RIGHT), **_THREE_REAL_VIEWS),
+    "wrist_left_right_head": Cosmos3CameraPreset(cameras=tuple(WRIST_LEFT_RIGHT_HEAD), **_THREE_REAL_VIEWS),
+}
+
+
 def get_camera_preset(name: str):
     try:
         return CAMERA_PRESETS[name]
     except KeyError as exc:
         raise ValueError(f"Unsupported UR5 camera preset: {name!r}") from exc
+
+
+def get_cosmos3_camera_preset(name: str) -> Cosmos3CameraPreset:
+    try:
+        return COSMOS3_CAMERA_PRESETS[name]
+    except KeyError as exc:
+        choices = ", ".join(sorted(COSMOS3_CAMERA_PRESETS))
+        raise ValueError(f"Unsupported Cosmos3 UR5 camera preset {name!r}; choose one of: {choices}") from exc

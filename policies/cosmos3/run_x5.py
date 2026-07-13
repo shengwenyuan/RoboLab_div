@@ -8,19 +8,15 @@ import logging
 import sys
 import traceback
 
-import cv2  # Must import this before isaaclab. Do not remove
+import cv2  # noqa: F401  # Must import this before isaaclab. Do not remove
 from isaaclab.app import AppLauncher
 
 POLICY = "cosmos3_x5"
 logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser(description="Evaluate the Cosmos3 policy backend on ARX X5.")
-parser.add_argument(
-    "--remote-host", default="localhost", help="Remote host for policy server (default: localhost)."
-)
-parser.add_argument(
-    "--remote-port", default=8000, type=int, help="Remote port for policy server (default: 8000)."
-)
+parser.add_argument("--remote-host", default="localhost", help="Remote host for policy server (default: localhost).")
+parser.add_argument("--remote-port", default=8000, type=int, help="Remote port for policy server (default: 8000).")
 
 from robolab.eval.runner import add_common_eval_args, clear_task_filter_for_explicit_paths, run_evaluation
 
@@ -34,8 +30,22 @@ app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 from policies.cosmos3.client import Cosmos3Client
+from policies.cosmos3.specs import (
+    JOINT_CURRENT_STATE_CONDITIONING,
+    STANDARD_THREE_VIEW_OBSERVATION,
+    ClientCapability,
+)
 from robolab.registrations.x5.auto_env_registrations_jointpos import auto_register_x5_envs
 from robolab.registrations.x5.camera_presets import WRIST_LEFT_RIGHT_HEAD
+
+X5_CAPABILITY = ClientCapability(
+    robot="x5",
+    arm_dof=6,
+    action_spaces=("joint_position",),
+    joint_action_layout=tuple(f"joint{index}" for index in range(1, 7)),
+    conditioning_by_action_space={"joint_position": JOINT_CURRENT_STATE_CONDITIONING},
+    observation=STANDARD_THREE_VIEW_OBSERVATION,
+)
 
 auto_register_x5_envs(task=args_cli.task, cameras=WRIST_LEFT_RIGHT_HEAD)
 if clear_task_filter_for_explicit_paths(args_cli):
@@ -44,7 +54,11 @@ if clear_task_filter_for_explicit_paths(args_cli):
 
 def make_client(args: argparse.Namespace) -> Cosmos3Client:
     """ """
-    return Cosmos3Client(remote_host=args.remote_host, remote_port=args.remote_port)
+    return Cosmos3Client(
+        remote_host=args.remote_host,
+        remote_port=args.remote_port,
+        capability=X5_CAPABILITY,
+    )
 
 
 def main() -> None:

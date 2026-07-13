@@ -5,13 +5,26 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from openpi_client import image_tools, websocket_client_policy
 
+from policies.cosmos3.specs import (
+    DEFAULT_CONTROL_FPS,
+    JOINT_CURRENT_STATE_CONDITIONING,
+    STATELESS_CONDITIONING,
+    ClientCapability,
+    ObservationCapability,
+    PolicyContract,
+    binarize_close_fraction,
+    expand_action_chunk,
+    validate_same_policy_semantics,
+    validate_server_metadata,
+    validate_wire_action_chunk,
+)
 from robolab.core.motion.eef import (
     EEFPolicyObservation,
     parse_eef_pose_action,
@@ -20,35 +33,65 @@ from robolab.core.motion.eef import (
 )
 from robolab.core.motion.pinocchio import PinocchioIKBridge
 from robolab.eval.base_client import InferenceClient
-from robolab.robots.ur5_profile import UR5E_PINOCCHIO_URDF_PATH, get_ur5_berkeley_eef_profile
+from robolab.robots.ur5_profile import (
+    UR5E_PINOCCHIO_URDF_PATH,
+    get_ur5_berkeley_eef_profile,
+    get_ur5_eef_profile,
+)
 
 logger = logging.getLogger(__name__)
 
-ServerActionFormat = Literal["auto", "joint", "eef_pose"]
-
 
 class Cosmos3Client(InferenceClient):
-    """Cosmos3 DROID client."""
+    """Cosmos3 joint-policy client configured by a RoboLab capability."""
 
     IMAGE_W = 640
     IMAGE_H = 360
-    OPEN_LOOP_HORIZON = 32
 
-    def __init__(self, remote_host: str = "localhost", remote_port: int = 8000):
+    def __init__(
+        self,
+        remote_host: str = "localhost",
+        remote_port: int = 8000,
+        *,
+        capability: ClientCapability,
+        control_fps: int = DEFAULT_CONTROL_FPS,
+    ) -> None:
         super().__init__()
+        self.capability = capability
+        self.control_fps = int(control_fps)
+        self.policy_contract: PolicyContract | None = None
         self._remote_host = remote_host
         self._remote_port = remote_port
-        self._image_w = self.IMAGE_W
-        self._image_h = self.IMAGE_H
-        self.open_loop_horizon = self.OPEN_LOOP_HORIZON
+        self._image_h, self._image_w = capability.observation.view_shape_hw
 
         display = f"{self._remote_host}:{self._remote_port}"
         print(f"[{self.__class__.__name__}] Awaiting for server on {display} to be ready...")
         self.client = self._connect()
+        assert self.policy_contract is not None
+        self.open_loop_horizon = self.policy_contract.chunk_size
         print(f"[{self.__class__.__name__}] Connected to {display}.")
 
     def _connect(self) -> websocket_client_policy.WebsocketClientPolicy:
-        return websocket_client_policy.WebsocketClientPolicy(self._remote_host, self._remote_port)
+        client = websocket_client_policy.WebsocketClientPolicy(self._remote_host, self._remote_port)
+        actual = validate_server_metadata(client.get_server_metadata(), self.capability)
+        self._validate_policy_contract(actual)
+        actual.hold_ratio(self.control_fps)
+        if self.policy_contract is not None:
+            validate_same_policy_semantics(self.policy_contract, actual)
+        self.policy_contract = actual
+        logger.info(
+            "[%s] validated server contract profile=%s robot=%s action_space=%s fps=%d chunk=%d",
+            self.__class__.__name__,
+            actual.profile_id,
+            actual.robot,
+            actual.action_space,
+            actual.policy_fps,
+            actual.chunk_size,
+        )
+        return client
+
+    def _validate_policy_contract(self, contract: PolicyContract) -> None:
+        """Subclass hook for action codecs beyond generic joint position."""
 
     def _infer_with_retry(self, request: dict, max_retries: int = 3) -> dict:
         import websockets.exceptions
@@ -76,30 +119,19 @@ class Cosmos3Client(InferenceClient):
         raise RuntimeError("unreachable retry state")
 
     def _extract_observation(self, raw_obs: dict, *, env_id: int = 0) -> dict:
-        left_image = raw_obs["image_obs"]["over_shoulder_left_camera"][env_id].cpu().numpy()
-        left_image = image_tools.resize_with_pad(left_image, self._image_h, self._image_w)
-        right_image = raw_obs["image_obs"]["over_shoulder_right_camera"][env_id].cpu().numpy()
-        right_image = image_tools.resize_with_pad(right_image, self._image_h, self._image_w)
-        wrist_image = raw_obs["image_obs"]["wrist_cam"][env_id].cpu().numpy()
-        wrist_image = image_tools.resize_with_pad(wrist_image, self._image_h, self._image_w)
+        canvas_views = self._extract_canvas_views(raw_obs["image_obs"], env_id=env_id)
 
         joint_position = raw_obs["proprio_obs"]["arm_joint_pos"][env_id].cpu().numpy()
         gripper_position = raw_obs["proprio_obs"]["gripper_pos"][env_id].cpu().numpy()
 
         return {
-            "left_image": left_image,
-            "right_image": right_image,
-            "wrist_image": wrist_image,
+            "canvas_views": canvas_views,
             "joint_position": joint_position,
             "gripper_position": gripper_position,
         }
 
     def _pack_request(self, extracted_obs: dict, instruction: str) -> dict:
-        image = self._compose_canvas(
-            extracted_obs["left_image"],
-            extracted_obs["wrist_image"],
-            extracted_obs["right_image"],
-        )
+        image = self._compose_canvas(extracted_obs["canvas_views"])
 
         return {
             "observation/image": image,
@@ -132,25 +164,71 @@ class Cosmos3Client(InferenceClient):
         return response
 
     def _unpack_response(self, response: dict) -> np.ndarray:
-        return np.asarray(response["action"])
+        if not isinstance(response, dict) or "action" not in response:
+            raise ValueError(f"Expected Cosmos3 response dict with an 'action' key, got {type(response).__name__}")
+        assert self.policy_contract is not None
+        return validate_wire_action_chunk(response["action"], self.policy_contract)
 
     def _postprocess_chunk(self, chunk: np.ndarray) -> np.ndarray:
-        chunk = chunk.copy()
-        chunk[..., -1] = (chunk[..., -1] > 0.5).astype(chunk.dtype)
-        return chunk
+        return binarize_close_fraction(chunk)
+
+    def _needs_refresh(self, env_id: int) -> bool:
+        return env_id not in self._chunks or self._counters[env_id] >= len(self._chunks[env_id])
+
+    def _set_chunk(self, env_id: int, chunk: np.ndarray) -> None:
+        assert self.policy_contract is not None
+        expanded = expand_action_chunk(chunk, self.policy_contract, control_fps=self.control_fps)
+        logger.info(
+            "[%s] event=action_buffer env_id=%d profile=%s source_chunk_size=%d buffer_steps=%d",
+            self.__class__.__name__,
+            env_id,
+            self.policy_contract.profile_id,
+            len(chunk),
+            len(expanded),
+        )
+        super()._set_chunk(env_id, expanded)
 
     def _build_visualization(self, extracted_obs: dict) -> np.ndarray:
-        left = extracted_obs["left_image"]
-        wrist = extracted_obs["wrist_image"]
-        right = extracted_obs["right_image"]
-        return np.concatenate((left, wrist, right), axis=1)
+        primary, aux_left, aux_right = extracted_obs["canvas_views"]
+        # Preserve the historical horizontal debug view while the model canvas
+        # remains primary-on-top and auxiliaries on the bottom row.
+        return np.concatenate((aux_left, primary, aux_right), axis=1)
 
-    def _compose_canvas(self, left_image: np.ndarray, wrist_image: np.ndarray, right_image: np.ndarray) -> np.ndarray:
-        wrist = wrist_image
+    def _extract_canvas_views(self, image_obs: dict, *, env_id: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        observation = self.capability.observation
+        if len(observation.view_roles) != 3:
+            raise ValueError(
+                "Cosmos3 primary_top_aux_bottom_pair canvas requires exactly three ordered view roles, "
+                f"got {observation.view_roles!r}"
+            )
+
+        real_images: dict[str, np.ndarray] = {}
+        for role in observation.view_roles:
+            source = observation.role_sources[role]
+            if source is None or source in real_images:
+                continue
+            if source not in image_obs:
+                raise KeyError(f"Cosmos3 observation role {role!r} requires image_obs[{source!r}]")
+            image = _to_numpy(image_obs[source][env_id])
+            real_images[source] = image_tools.resize_with_pad(image, self._image_h, self._image_w)
+        if not real_images:
+            raise ValueError("Cosmos3 observation preset has no available real camera source")
+
+        reference = next(iter(real_images.values()))
+        views = tuple(
+            np.zeros_like(reference)
+            if observation.role_sources[role] is None
+            else real_images[observation.role_sources[role]]
+            for role in observation.view_roles
+        )
+        return views
+
+    def _compose_canvas(self, views: tuple[np.ndarray, np.ndarray, np.ndarray]) -> np.ndarray:
+        primary, aux_left, aux_right = views
         size = (self._image_h // 2, self._image_w // 2)
-        left = self._resize_for_canvas(left_image, size=size, dtype=wrist.dtype)
-        right = self._resize_for_canvas(right_image, size=size, dtype=wrist.dtype)
-        return np.concatenate((wrist, np.concatenate((left, right), axis=1)), axis=0)
+        left = self._resize_for_canvas(aux_left, size=size, dtype=primary.dtype)
+        right = self._resize_for_canvas(aux_right, size=size, dtype=primary.dtype)
+        return np.concatenate((primary, np.concatenate((left, right), axis=1)), axis=0)
 
     @staticmethod
     def _resize_for_canvas(image: np.ndarray, *, size: tuple[int, int], dtype: np.dtype) -> np.ndarray:
@@ -159,46 +237,76 @@ class Cosmos3Client(InferenceClient):
         return resized.squeeze(0).permute(1, 2, 0).numpy().astype(dtype, copy=False)
 
 
-def droid_action_to_ur5(action: np.ndarray) -> np.ndarray:
-    """Map joint-space arm/gripper actions to UR5's 7D env action chunk."""
-    action = np.asarray(action, dtype=np.float32)
-    if action.ndim == 1:
-        action = action[None, ...]
-    if action.ndim != 2 or action.shape[-1] < 7:
-        raise ValueError(f"Expected joint action shape (H, D>=7) with a gripper channel, got {action.shape}")
-    return np.concatenate([action[..., :6], action[..., -1:]], axis=-1)
-
-
 class Cosmos3UR5Client(Cosmos3Client):
-    """Cosmos3 client for UR5e joint-position environments.
-
-    The server may return joint-space actions or single-arm 8D absolute
-    EEF pose actions. Both are normalized to the UR5 7D
-    ``[arm_joint_pos(6), gripper(1)]`` action expected by the IsaacLab
-    action manager.
-    """
+    """Cosmos3 client that decodes explicit UR5 joint or EEF contracts."""
 
     def __init__(
         self,
         remote_host: str = "localhost",
         remote_port: int = 8000,
         *,
-        server_action_format: ServerActionFormat = "eef_pose",
+        observation: ObservationCapability,
+        control_fps: int = DEFAULT_CONTROL_FPS,
         pinocchio_urdf_path: str | None = None,
         ik_pos_tol: float = 0.005,
         ik_rot_tol: float = 0.05,
     ) -> None:
-        if server_action_format not in ("auto", "joint", "eef_pose"):
-            raise ValueError(f"Unsupported server_action_format: {server_action_format!r}")
-        self.server_action_format = server_action_format
-        self._profile = get_ur5_berkeley_eef_profile()
+        self._profile = get_ur5_eef_profile()
         self._env_action_dim = self._profile.env_action_dim + 1
         self._pinocchio_urdf_path = pinocchio_urdf_path or UR5E_PINOCCHIO_URDF_PATH
         self._ik_pos_tol = ik_pos_tol
         self._ik_rot_tol = ik_rot_tol
         self._eef_bridge: PinocchioIKBridge | None = None
         self._last_diagnostics: dict[int, list[dict[str, Any]]] = {}
-        super().__init__(remote_host=remote_host, remote_port=remote_port)
+        super().__init__(
+            remote_host=remote_host,
+            remote_port=remote_port,
+            capability=ClientCapability(
+                robot="ur5",
+                arm_dof=6,
+                action_spaces=("joint_position", "eef_absolute"),
+                joint_action_layout=(
+                    "shoulder_pan",
+                    "shoulder_lift",
+                    "elbow",
+                    "wrist_1",
+                    "wrist_2",
+                    "wrist_3",
+                ),
+                conditioning_by_action_space={
+                    "joint_position": JOINT_CURRENT_STATE_CONDITIONING,
+                    "eef_absolute": STATELESS_CONDITIONING,
+                },
+                observation=observation,
+            ),
+            control_fps=control_fps,
+        )
+
+    def _validate_policy_contract(self, contract: PolicyContract) -> None:
+        if contract.action_space == "joint_position":
+            return
+        expected_layout = ("x", "y", "z", "qx", "qy", "qz", "qw", "gripper")
+        if contract.action_layout != expected_layout:
+            raise ValueError(
+                f"UR5 EEF policies require xyz+quat_xyzw+gripper wire actions; got layout={contract.action_layout!r}"
+            )
+        if (contract.quaternion_order, contract.pose_mode) != ("xyzw", "absolute"):
+            raise ValueError(
+                "UR5 EEF policies require absolute xyz+quat_xyzw+gripper wire actions; "
+                f"got quaternion_order={contract.quaternion_order!r}, pose_mode={contract.pose_mode!r}"
+            )
+        profile_by_frame = {
+            "tool0": get_ur5_eef_profile,
+            "berkeley_tcp": get_ur5_berkeley_eef_profile,
+        }
+        try:
+            profile = profile_by_frame[contract.eef_frame]()
+        except KeyError as exc:
+            raise ValueError(
+                f"UR5 EEF policies require eef_frame='tool0' or 'berkeley_tcp'; got {contract.eef_frame!r}"
+            ) from exc
+        self._profile = profile
+        self._env_action_dim = profile.env_action_dim + 1
 
     def infer(self, obs: Any, instruction: str, *, env_id: int = 0) -> dict:
         extracted = self._extract_observation(obs, env_id=env_id)
@@ -211,25 +319,27 @@ class Cosmos3UR5Client(Cosmos3Client):
             except Exception:
                 elapsed_ms = (time.perf_counter() - query_start) * 1000.0
                 logger.warning(
-                    "[%s] event=ur5_query status=error elapsed_ms=%.1f env_id=%d horizon=%d",
+                    "[%s] event=ur5_query status=error elapsed_ms=%.1f env_id=%d profile=%s",
                     self.__class__.__name__,
                     elapsed_ms,
                     env_id,
-                    self.open_loop_horizon,
+                    self.policy_contract.profile_id,
                 )
                 raise
             elapsed_ms = (time.perf_counter() - query_start) * 1000.0
             chunk, diagnostics = self._convert_response_chunk(response, extracted, env_id=env_id)
             self._set_chunk(env_id, chunk)
             self._last_diagnostics[env_id] = diagnostics
-            format_name = diagnostics[0].get("server_action_format") if diagnostics else "unknown"
             logger.info(
-                "[%s] event=ur5_query status=ok elapsed_ms=%.1f env_id=%d horizon=%d action_format=%s",
+                "[%s] event=ur5_query status=ok elapsed_ms=%.1f env_id=%d profile=%s "
+                "source_chunk_size=%d buffer_steps=%d action_space=%s",
                 self.__class__.__name__,
                 elapsed_ms,
                 env_id,
-                self.open_loop_horizon,
-                format_name,
+                self.policy_contract.profile_id,
+                self.policy_contract.chunk_size,
+                len(self._chunks[env_id]),
+                self.policy_contract.action_space,
             )
 
         return {
@@ -247,30 +357,10 @@ class Cosmos3UR5Client(Cosmos3Client):
         else:
             self._last_diagnostics.pop(env_id, None)
 
-    def _compose_canvas(self, left_image: np.ndarray, wrist_image: np.ndarray, right_image: np.ndarray) -> np.ndarray:
-        size = (self._image_h // 2, self._image_w // 2)
-        left = self._resize_for_canvas(left_image, size=size, dtype=wrist_image.dtype)
-        right = np.zeros_like(left)
-        return np.concatenate((wrist_image, np.concatenate((left, right), axis=1)), axis=0)
-
     def _extract_observation(self, raw_obs: dict, *, env_id: int = 0) -> dict:
         image_obs = raw_obs["image_obs"]
-        left_image = image_obs["over_shoulder_left_camera"][env_id].cpu().numpy()
-        left_image = image_tools.resize_with_pad(left_image, self._image_h, self._image_w)
-
-        right_tensor = image_obs.get("over_shoulder_right_camera")
-        if right_tensor is None:
-            right_image = np.zeros_like(left_image)
-        else:
-            right_image = right_tensor[env_id].cpu().numpy()
-            right_image = image_tools.resize_with_pad(right_image, self._image_h, self._image_w)
-
-        wrist_tensor = image_obs.get("wrist_cam")
-        if wrist_tensor is None:
-            wrist_image = np.zeros_like(left_image)
-        else:
-            wrist_image = wrist_tensor[env_id].cpu().numpy()
-            wrist_image = image_tools.resize_with_pad(wrist_image, self._image_h, self._image_w)
+        canvas_views = self._extract_canvas_views(image_obs, env_id=env_id)
+        primary_image, aux_left_image, aux_right_image = canvas_views
 
         proprio_obs = raw_obs["proprio_obs"]
         arm_joint_position = _to_numpy(proprio_obs["arm_joint_pos"][env_id]).astype(np.float32, copy=False)
@@ -294,9 +384,9 @@ class Cosmos3UR5Client(Cosmos3Client):
             )
             eef_quat_xyzw = quat_wxyz_to_xyzw(ee_quat).astype(np.float32, copy=False)
             eef_observation = EEFPolicyObservation(
-                primary_image=left_image,
-                wrist_image=wrist_image,
-                secondary_image=right_image,
+                primary_image=aux_left_image,
+                wrist_image=primary_image,
+                secondary_image=aux_right_image,
                 joint_position=arm_joint_position,
                 ee_pos=eef_pos,
                 ee_quat_wxyz=ee_quat,
@@ -310,9 +400,7 @@ class Cosmos3UR5Client(Cosmos3Client):
             eef_pose_xyzw = np.concatenate([eef_pos, eef_quat_xyzw, gripper_position]).astype(np.float32, copy=False)
 
         return {
-            "left_image": left_image,
-            "right_image": right_image,
-            "wrist_image": wrist_image,
+            "canvas_views": canvas_views,
             "joint_position": joint_position,
             "arm_joint_position": arm_joint_position,
             "gripper_position": gripper_position,
@@ -324,13 +412,13 @@ class Cosmos3UR5Client(Cosmos3Client):
 
     def _pack_request(self, extracted_obs: dict, instruction: str) -> dict:
         request = super()._pack_request(extracted_obs, instruction)
-        request["observation/arm_joint_position"] = extracted_obs["arm_joint_position"]
-        requires_eef = self.server_action_format == "eef_pose"
+        assert self.policy_contract is not None
+        requires_eef = self.policy_contract.action_space == "eef_absolute"
         if requires_eef and extracted_obs["eef_pose_xyzw"] is None:
             raise ValueError(
-                f"server_action_format={self.server_action_format!r} requires UR5 observation ee_pos/ee_quat"
+                f"server profile {self.policy_contract.profile_id!r} requires UR5 observation ee_pos/ee_quat"
             )
-        if extracted_obs["eef_pose_xyzw"] is not None:
+        if requires_eef:
             request["observation/eef_pose"] = _history_row(extracted_obs["eef_pose_xyzw"])
             request["observation/eef_pos"] = _history_row(extracted_obs["eef_pos"])
             request["observation/eef_quat"] = _history_row(extracted_obs["eef_quat_xyzw"])
@@ -340,56 +428,46 @@ class Cosmos3UR5Client(Cosmos3Client):
     def _convert_response_chunk(
         self, response: dict, extracted_obs: dict, *, env_id: int
     ) -> tuple[np.ndarray, list[dict[str, Any]]]:
-        if not isinstance(response, dict) or "action" not in response:
-            raise ValueError(f"Expected Cosmos response dict with an 'action' key, got {type(response).__name__}")
-        action = np.asarray(response["action"], dtype=np.float32)
-        if action.ndim == 1:
-            action = action[None, :]
-        action_format = self._resolve_action_format(action)
-        if action_format == "joint":
-            chunk = np.nan_to_num(droid_action_to_ur5(action).astype(np.float32, copy=True))
-            chunk[..., -1] = (chunk[..., -1] > 0.5).astype(chunk.dtype)
-            self._validate_horizon(chunk)
-            return chunk, [
-                {
-                    "env_id": env_id,
-                    "server_action_format": "joint",
-                    "source_action_shape": tuple(action.shape),
-                }
-            ]
+        action = self._unpack_response(response)
+        assert self.policy_contract is not None
+        if self.policy_contract.action_space == "joint_position":
+            return self._convert_joint_chunk(action, env_id=env_id)
+        return self._convert_eef_chunk(action, extracted_obs, env_id=env_id)
 
+    def _convert_joint_chunk(self, action: np.ndarray, *, env_id: int) -> tuple[np.ndarray, list[dict[str, Any]]]:
+        chunk = self._postprocess_chunk(action.astype(np.float32, copy=False))
+        self._validate_decoded_chunk(chunk)
+        return chunk, [
+            {
+                "env_id": env_id,
+                "action_space": "joint_position",
+                "source_action_shape": tuple(action.shape),
+            }
+        ]
+
+    def _convert_eef_chunk(
+        self, action: np.ndarray, extracted_obs: dict, *, env_id: int
+    ) -> tuple[np.ndarray, list[dict[str, Any]]]:
         eef_observation = extracted_obs.get("eef_observation")
         if eef_observation is None:
-            raise ValueError("Server returned EEF action but UR5 observation does not contain ee_pos/ee_quat")
-        bridge = self._get_eef_bridge()
-        if action_format != "eef_pose":
-            raise ValueError(f"Unexpected EEF action format: {action_format}")
+            raise ValueError("EEF policy requires a UR5 observation containing ee_pos/ee_quat")
+
         eef_chunk = parse_eef_pose_action(action)
-        if eef_chunk.horizon != self.open_loop_horizon:
-            raise ValueError(f"Expected EEF horizon {self.open_loop_horizon}, got {eef_chunk.raw.shape}")
+        bridge = self._get_eef_bridge()
         result = bridge.convert_chunk(eef_observation, eef_chunk, env_id=env_id)
         raw_gripper = result.raw_gripper if result.raw_gripper is not None else eef_chunk.gripper
-        gripper = (np.asarray(raw_gripper, dtype=np.float32).reshape(eef_chunk.horizon, 1) > 0.5).astype(np.float32)
-        arm_chunk = np.nan_to_num(result.actions.astype(np.float32, copy=True))
+        gripper = np.asarray(raw_gripper, dtype=np.float32).reshape(eef_chunk.horizon, 1)
+        arm_chunk = np.asarray(result.actions, dtype=np.float32)
+        if not np.isfinite(arm_chunk).all() or not np.isfinite(gripper).all():
+            raise ValueError("UR5 EEF conversion produced non-finite actions")
         chunk = np.concatenate([arm_chunk, gripper], axis=-1)
-        self._validate_horizon(chunk)
+        chunk = self._postprocess_chunk(chunk)
+        self._validate_decoded_chunk(chunk)
         for diag in result.diagnostics:
-            diag["server_action_format"] = action_format
+            diag["action_space"] = "eef_absolute"
             diag["source_action_shape"] = tuple(action.shape)
             diag["ik_backend"] = "pinocchio"
         return chunk, result.diagnostics
-
-    def _resolve_action_format(self, action: np.ndarray) -> Literal["joint", "eef_pose"]:
-        if self.server_action_format != "auto":
-            return self.server_action_format
-        if action.ndim != 2:
-            raise ValueError(f"Expected server action shape (H, D), got {action.shape}")
-        if action.shape[-1] == 8:
-            # 8D is ambiguous with some joint+gripper layouts; UR5 auto treats it as EEF pose.
-            return "eef_pose"
-        if action.shape[-1] >= 6:
-            return "joint"
-        raise ValueError(f"Cannot infer UR5 server action format from shape {action.shape}")
 
     def _get_eef_bridge(self) -> PinocchioIKBridge:
         if self._eef_bridge is None:
@@ -401,11 +479,13 @@ class Cosmos3UR5Client(Cosmos3Client):
             )
         return self._eef_bridge
 
-    def _validate_horizon(self, chunk: np.ndarray) -> None:
-        if chunk.ndim != 2 or chunk.shape != (self.open_loop_horizon, self._env_action_dim):
-            raise ValueError(
-                f"Expected UR5 action chunk shape ({self.open_loop_horizon}, {self._env_action_dim}), got {chunk.shape}"
-            )
+    def _validate_decoded_chunk(self, chunk: np.ndarray) -> None:
+        assert self.policy_contract is not None
+        expected_shape = (self.policy_contract.chunk_size, self._env_action_dim)
+        if chunk.ndim != 2 or chunk.shape != expected_shape:
+            raise ValueError(f"Expected decoded UR5 action shape {expected_shape}, got {chunk.shape}")
+        if not np.isfinite(chunk).all():
+            raise ValueError("Decoded UR5 action chunk contains non-finite values")
 
 
 def _to_numpy(value: Any) -> np.ndarray:

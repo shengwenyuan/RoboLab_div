@@ -132,8 +132,14 @@ def test_cosmos_ur5_observation_converts_tool0_pose_to_berkeley_tcp() -> None:
     client._profile = get_ur5_berkeley_eef_profile()
     client._image_h = 2
     client._image_w = 2
-    client.server_action_format = "eef_pose"
     half_sqrt_2 = np.float32(np.sqrt(0.5))
+    zero_image = np.zeros((2, 2, 3), dtype=np.uint8)
+
+    def _extract_canvas_views(_image_obs, *, env_id):
+        del env_id
+        return zero_image, zero_image, zero_image
+
+    client._extract_canvas_views = _extract_canvas_views
     raw_observation = {
         "image_obs": {
             "over_shoulder_left_camera": torch.zeros((1, 2, 2, 3), dtype=torch.uint8),
