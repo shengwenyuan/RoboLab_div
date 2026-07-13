@@ -73,6 +73,7 @@ class PinocchioIKBridge:
         self._modules = _load_pinocchio_modules()
         self._pin = self._modules.pin
         self._model = self._pin.buildModelFromUrdf(urdf_path)
+        self._add_fixed_operational_frame()
         self._data = self._model.createData()
         if not self._model.existFrame(profile.ee_link):
             raise ValueError(f"Pinocchio model has no frame {profile.ee_link!r}: {urdf_path}")
@@ -82,6 +83,33 @@ class PinocchioIKBridge:
                 f"Pinocchio model dim nq={self._model.nq}, nv={self._model.nv} does not match "
                 f"{profile.name} env action dim {profile.env_action_dim}"
             )
+
+    def _add_fixed_operational_frame(self) -> None:
+        fixed_frame = self.profile.fixed_operational_frame
+        if fixed_frame is None or self._model.existFrame(self.profile.ee_link):
+            return
+        if not self._model.existFrame(fixed_frame.parent_link):
+            raise ValueError(
+                f"Pinocchio model has no parent frame {fixed_frame.parent_link!r} required by "
+                f"operational frame {self.profile.ee_link!r}: {self.urdf_path}"
+            )
+
+        pin = self._pin
+        parent_frame_id = self._model.getFrameId(fixed_frame.parent_link)
+        parent_frame = self._model.frames[parent_frame_id]
+        offset_rotation = np.asarray(
+            quat_to_matrix_wxyz(np.asarray(fixed_frame.quat_wxyz, dtype=np.float32)), dtype=np.float64
+        )
+        offset = pin.SE3(offset_rotation, np.asarray(fixed_frame.xyz, dtype=np.float64))
+        placement_in_parent_joint = parent_frame.placement * offset
+        frame = pin.Frame(
+            self.profile.ee_link,
+            parent_frame.parent,
+            parent_frame_id,
+            placement_in_parent_joint,
+            pin.FrameType.OP_FRAME,
+        )
+        self._model.addFrame(frame, False)
 
     def reset(self, *, env_id: int | None = None) -> None:
         if env_id is None:

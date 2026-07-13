@@ -1,8 +1,63 @@
-Robotiq 2F-85 URDF/xacro and mesh files copied from the ROS-Industrial attic robotiq repository.
-Repository: https://github.com/ros-industrial-attic/robotiq
-Branch: kinetic-devel
-Package: robotiq_2f_85_gripper_visualization
-Package README: https://github.com/ros-industrial-attic/robotiq/tree/kinetic-devel/robotiq_2f_85_gripper_visualization
-Raw mesh root: https://raw.githubusercontent.com/ros-industrial-attic/robotiq/kinetic-devel/robotiq_2f_85_gripper_visualization/meshes/
-License: BSD, copied locally as LICENSE.BSD-ROS-Industrial-Robotiq.txt.
-Note: This repository is archived/unmaintained and is not the Robotiq manufacturer support portal; it is used here as the public ROS description/mesh source for engineering visualization.
+Canonical simulation source
+===========================
+
+Repository: https://github.com/google-deepmind/mujoco_menagerie
+Model: robotiq_2f85_v4
+Pinned commit: 71f066ad0be9cd271f7ed58c030243ef157af9f4
+Model XML: https://github.com/google-deepmind/mujoco_menagerie/blob/71f066ad0be9cd271f7ed58c030243ef157af9f4/robotiq_2f85_v4/2f85.xml
+Model README: https://github.com/google-deepmind/mujoco_menagerie/blob/71f066ad0be9cd271f7ed58c030243ef157af9f4/robotiq_2f85_v4/README.md
+License: BSD 2-Clause, Copyright (c) 2013 ROS-Industrial; copied locally as
+  LICENSE.BSD-ROS-Industrial-Robotiq.txt
+
+The v4 README records the Robotiq STEP CAD and fingertip STEP CAD used to build
+the model. RoboLab ports the v4 body/mesh transforms as one coordinate system;
+it does not mix v4 geometry with the old ROS joint frames.
+
+Menagerie's lower and upper pad boxes use scalar friction values `0.7` and
+`0.6`, respectively. RoboLab binds them as separate Isaac materials: lower
+`static=dynamic=0.7`, upper `static=dynamic=0.6`, both with zero restitution.
+Only the two small pad collision instance roots are expanded to author these
+bindings; the rest of the robot remains instanced. MuJoCo solimp and solref
+parameters still have no direct URDF representation.
+
+Imported v4 files and SHA-256
+----------------------------
+
+meshes/menagerie_v4/base.stl
+  1019b87c1dcff4a08a2fdca2dfd4893d60a5e2fc53512c6b5fe2e372b75c9aa3
+meshes/menagerie_v4/base_coupling.stl
+  6a2517f9d6d78f89d9edb617fb93a279b4d52ac61c12d9cb743c701676eeb06d
+meshes/menagerie_v4/c-a01-85-open.stl
+  13ad73ef491f6f28b9ed6b8fbb3d6fb45896110ea7d415cda1689fc8daa5d925
+meshes/menagerie_v4/coupler.stl
+  54949f7355c35c976d854fb77272feb92d9201213e343a8852429556fc81d416
+meshes/menagerie_v4/driver.stl
+  baf8b4dde18ce59eeebc0928a289c69dccec9da81bb186e2838e2e304274e106
+meshes/menagerie_v4/follower.stl
+  28811d3651345dbb5f2020c67d3bd05f754b5e3e791e379c3c4d1d87418bb9c5
+meshes/menagerie_v4/pad.stl
+  c0f4d31e867a5b3634c102669b76ac5e8c026ede5fc645b751a5eb3d4bb0be02
+meshes/menagerie_v4/spring_link.stl
+  56e9f28ce90841d654ab6d953161aeb62142b1459c210335d5862e7fcb281aab
+meshes/menagerie_v4/tongue.stl
+  2bd5df8a2132542703d40d94be36a990bbc3eabe070283232871147081348d52
+
+Physical reference
+------------------
+
+Robotiq, "2F-85 & 2F-140 Instruction Manual", 2018, section 6.2.3:
+  2F-85 mass including coupling 0.900 kg; center of mass Z=57 mm;
+  nominal TCP Z=171 mm.
+
+RoboLab's Berkeley profile intentionally uses the dataset convention of
+170 mm, not the manual's 171 mm nominal value.
+
+Legacy provenance only
+----------------------
+
+The old visual/collision/xacro files in this directory came from the archived
+ROS-Industrial Robotiq kinetic-devel visualization package:
+https://github.com/ros-industrial-attic/robotiq/tree/kinetic-devel/robotiq_2f_85_gripper_visualization
+
+They and the earlier `meshes/menagerie/` baseline are not referenced by the
+canonical v4 URDF and must not be used as a physics source.

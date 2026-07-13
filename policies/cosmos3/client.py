@@ -12,10 +12,15 @@ import torch
 import torch.nn.functional as F
 from openpi_client import image_tools, websocket_client_policy
 
-from robolab.core.motion.eef import EEFPolicyObservation, parse_eef_pose_action, quat_wxyz_to_xyzw
+from robolab.core.motion.eef import (
+    EEFPolicyObservation,
+    parse_eef_pose_action,
+    quat_wxyz_to_xyzw,
+    resolve_operational_frame_pose,
+)
 from robolab.core.motion.pinocchio import PinocchioIKBridge
 from robolab.eval.base_client import InferenceClient
-from robolab.robots.ur5_profile import UR5E_PINOCCHIO_URDF_PATH, get_ur5_eef_profile
+from robolab.robots.ur5_profile import UR5E_PINOCCHIO_URDF_PATH, get_ur5_berkeley_eef_profile
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +191,7 @@ class Cosmos3UR5Client(Cosmos3Client):
         if server_action_format not in ("auto", "joint", "eef_pose"):
             raise ValueError(f"Unsupported server_action_format: {server_action_format!r}")
         self.server_action_format = server_action_format
-        self._profile = get_ur5_eef_profile()
+        self._profile = get_ur5_berkeley_eef_profile()
         self._env_action_dim = self._profile.env_action_dim + 1
         self._pinocchio_urdf_path = pinocchio_urdf_path or UR5E_PINOCCHIO_URDF_PATH
         self._ik_pos_tol = ik_pos_tol
@@ -275,15 +280,18 @@ class Cosmos3UR5Client(Cosmos3Client):
             gripper_position = np.zeros((1,), dtype=np.float32)
         else:
             gripper_position = gripper_obs.reshape(1).astype(np.float32, copy=False)
-        ee_pos = _optional_proprio(proprio_obs, "ee_pos", env_id=env_id)
-        ee_quat = _optional_proprio(proprio_obs, "ee_quat", env_id=env_id)
+        ee_pos = _optional_proprio(proprio_obs, self._profile.ee_pos_key, env_id=env_id)
+        ee_quat = _optional_proprio(proprio_obs, self._profile.ee_quat_key, env_id=env_id)
         eef_observation = None
         eef_pose_xyzw = None
         eef_pos = None
         eef_quat_xyzw = None
         if ee_pos is not None and ee_quat is not None:
-            eef_pos = ee_pos.reshape(3).astype(np.float32, copy=False)
-            ee_quat = ee_quat.reshape(4).astype(np.float32, copy=False)
+            eef_pos, ee_quat = resolve_operational_frame_pose(
+                ee_pos.reshape(3),
+                ee_quat.reshape(4),
+                self._profile.fixed_operational_frame,
+            )
             eef_quat_xyzw = quat_wxyz_to_xyzw(ee_quat).astype(np.float32, copy=False)
             eef_observation = EEFPolicyObservation(
                 primary_image=left_image,
@@ -293,7 +301,11 @@ class Cosmos3UR5Client(Cosmos3Client):
                 ee_pos=eef_pos,
                 ee_quat_wxyz=ee_quat,
                 gripper_position=gripper_position,
-                metadata={"profile": self._profile.name, "env_id": env_id},
+                metadata={
+                    "profile": self._profile.name,
+                    "eef_frame": self._profile.ee_link,
+                    "env_id": env_id,
+                },
             )
             eef_pose_xyzw = np.concatenate([eef_pos, eef_quat_xyzw, gripper_position]).astype(np.float32, copy=False)
 
@@ -392,8 +404,7 @@ class Cosmos3UR5Client(Cosmos3Client):
     def _validate_horizon(self, chunk: np.ndarray) -> None:
         if chunk.ndim != 2 or chunk.shape != (self.open_loop_horizon, self._env_action_dim):
             raise ValueError(
-                f"Expected UR5 action chunk shape ({self.open_loop_horizon}, {self._env_action_dim}), "
-                f"got {chunk.shape}"
+                f"Expected UR5 action chunk shape ({self.open_loop_horizon}, {self._env_action_dim}), got {chunk.shape}"
             )
 
 

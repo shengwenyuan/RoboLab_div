@@ -18,22 +18,20 @@ from isaaclab.sensors import TiledCameraCfg
 from isaaclab.utils import configclass
 
 from robolab.robots.ur5_profile import ARM_JOINT_NAMES, GRIPPER_JOINT_NAMES, UR5E_URDF_PATH
+from robolab.robots.ur5_spawn import spawn_ur5e_robotiq_2f85
 
-UR5E_USD_CACHE_DIR = "/tmp/robolab_ur5e_robotiq_2f_85_articulated_usd"
+UR5E_USD_CACHE_DIR = "/tmp/robolab_ur5e_robotiq_2f_85_menagerie_v4_v5_usd"
+GRIPPER_MIMIC_JOINT_REGEX = (
+    "^(right_outer_knuckle_joint|left_inner_knuckle_joint|right_inner_knuckle_joint|"
+    "left_inner_finger_joint|right_inner_finger_joint)$"
+)
 GRIPPER_OPEN_POS = 0.0
-GRIPPER_CLOSED_POS = 0.8
-GRIPPER_MIMIC_JOINT_NAMES = [
-    "right_outer_knuckle_joint",
-    "left_inner_knuckle_joint",
-    "right_inner_knuckle_joint",
-    "left_inner_finger_joint",
-    "right_inner_finger_joint",
-]
-GRIPPER_ACTION_JOINT_NAMES = [*GRIPPER_JOINT_NAMES, *GRIPPER_MIMIC_JOINT_NAMES]
-GRIPPER_OPEN_COMMAND = {joint_name: GRIPPER_OPEN_POS for joint_name in GRIPPER_ACTION_JOINT_NAMES}
-GRIPPER_CLOSE_COMMAND = {joint_name: GRIPPER_CLOSED_POS for joint_name in GRIPPER_ACTION_JOINT_NAMES}
-for joint_name in ("left_inner_finger_joint", "right_inner_finger_joint"):
-    GRIPPER_CLOSE_COMMAND[joint_name] = -GRIPPER_CLOSED_POS
+# Menagerie v4 splits the actuator through two 0.485 tendon coefficients.
+# A full 0.8 control target therefore settles at this driver angle, with
+# roughly 0.095 mm of nominal pad preload.
+GRIPPER_CLOSED_POS = 0.8 / (2.0 * 0.485)
+GRIPPER_OPEN_COMMAND = {"finger_joint": GRIPPER_OPEN_POS}
+GRIPPER_CLOSE_COMMAND = {"finger_joint": GRIPPER_CLOSED_POS}
 UR5E_HOME_JOINT_POS = {
     "shoulder_pan_joint": 0.0,
     "shoulder_lift_joint": -1.57079632679,
@@ -60,8 +58,8 @@ _WRIST_CAM = TiledCameraCfg(
     ),
     offset=TiledCameraCfg.OffsetCfg(
         pos=(-0.19, 0.0, -0.005),
-        rot=(-0.270598, 0.6532815, 0.6532815, -0.270598), # w, x, y, z
-        convention="opengl",    
+        rot=(-0.270598, 0.6532815, 0.6532815, -0.270598),  # w, x, y, z
+        convention="opengl",
     ),
 )
 
@@ -73,14 +71,30 @@ class UR5eCfg:
     robot = ArticulationCfg(
         prim_path="{ENV_REGEX_NS}/robot",
         spawn=sim_utils.UrdfFileCfg(
+            func=spawn_ur5e_robotiq_2f85,
             asset_path=UR5E_URDF_PATH,
             usd_dir=UR5E_USD_CACHE_DIR,
             fix_base=True,
             root_link_name="base_link",
             merge_fixed_joints=False,
+            # IsaacLab 2.2 passes this flag to set_parse_mimic despite the
+            # misleading field name.  True creates one driven master plus five
+            # PhysxMimicJointAPI followers instead of six competing drives.
+            convert_mimic_joints_to_normal_joints=True,
+            # Preserve IsaacLab's convex-hull import default used by the UR5e.
+            # The gripper URDF supplies its own deliberately simple pad boxes.
+            collider_type="convex_hull",
             self_collision=True,
+            # The importer otherwise creates very soft mimic constraints
+            # (25 Hz, damping ratio 0.005), allowing external contact to spread
+            # follower joints by more than 0.1 rad. Zero compliance parameters
+            # produce a hard PhysX mimic constraint; runtime actuator gains are
+            # still supplied below for the arm and master finger joint.
             joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
-                gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=800.0, damping=40.0)
+                gains=sim_utils.UrdfConverterCfg.JointDriveCfg.NaturalFrequencyGainsCfg(
+                    natural_frequency={GRIPPER_MIMIC_JOINT_REGEX: 0.0},
+                    damping_ratio={GRIPPER_MIMIC_JOINT_REGEX: 0.0},
+                )
             ),
             activate_contact_sensors=True,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -88,6 +102,8 @@ class UR5eCfg:
                 max_depenetration_velocity=5.0,
             ),
             articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                # Keep UR5e self-collision enabled. The custom spawner masks
+                # only eight documented gripper-internal/mounting pairs.
                 enabled_self_collisions=True,
                 solver_position_iteration_count=32,
                 solver_velocity_iteration_count=1,
@@ -108,16 +124,14 @@ class UR5eCfg:
                 damping=40.0,
             ),
             "gripper": ImplicitActuatorCfg(
-                joint_names_expr=GRIPPER_ACTION_JOINT_NAMES,
-                effort_limit_sim=1000.0,
+                joint_names_expr=GRIPPER_JOINT_NAMES,
+                effort_limit_sim=5.0,
                 velocity_limit_sim=2.0,
-                stiffness=2000.0,
-                damping=100.0,
+                stiffness=100.0,
+                damping=10.0,
             ),
         },
     )
-
-
 
 
 class UR5eWithWristCameraCfg:
@@ -204,9 +218,9 @@ class UR5eJointPositionActionCfg:
 
     finger_joint = BinaryJointPositionZeroToOneActionCfg(
         asset_name="robot",
-        # Keep the environment action contract at one gripper scalar, while
-        # applying the command to the full Robotiq mechanism.
-        joint_names=GRIPPER_ACTION_JOINT_NAMES,
+        # The environment keeps one gripper scalar. PhysX propagates the
+        # master command to the five follower joints through mimic schemas.
+        joint_names=GRIPPER_JOINT_NAMES,
         open_command_expr=GRIPPER_OPEN_COMMAND,
         close_command_expr=GRIPPER_CLOSE_COMMAND,
     )
@@ -227,4 +241,6 @@ class ProprioceptionObservationCfg(ObsGroup):
         self.concatenate_terms = False
 
 
+# Filtered ContactSensor force matrices require exactly one source body per
+# environment. Preserve the historical left-pad contract used by task code.
 contact_gripper = {"gripper": "{ENV_REGEX_NS}/robot/left_inner_finger_pad"}

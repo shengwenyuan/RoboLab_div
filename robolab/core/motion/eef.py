@@ -20,6 +20,20 @@ MissingViewPolicy = Literal["mirror", "zero"]
 
 
 @dataclass(frozen=True)
+class FixedOperationalFrame:
+    """A fixed task frame expressed relative to a robot-description frame.
+
+    Keeping this transform in the policy profile avoids changing the meaning of
+    the manufacturer's frame (for example, Universal Robots' ``tool0``) and
+    avoids adding a fake rigid body to a dynamics model.
+    """
+
+    parent_link: str
+    xyz: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    quat_wxyz: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+
+
+@dataclass(frozen=True)
 class RobotEEFProfile:
     """Robot-specific wiring needed by generic EEF policy clients."""
 
@@ -28,6 +42,7 @@ class RobotEEFProfile:
     env_action_dim: int
     base_link: str
     ee_link: str
+    fixed_operational_frame: FixedOperationalFrame | None = None
     joint_position_key: str = "arm_joint_pos"
     ee_pos_key: str = "ee_pos"
     ee_quat_key: str = "ee_quat"
@@ -210,3 +225,25 @@ def matrix_to_quat_wxyz(matrix: np.ndarray) -> np.ndarray:
             quats[i, 3] = 0.25 * s
 
     return normalize_quat_wxyz(quats.reshape((*mat.shape[:-2], 4)))
+
+
+def resolve_operational_frame_pose(
+    parent_position: np.ndarray,
+    parent_quat_wxyz: np.ndarray,
+    fixed_frame: FixedOperationalFrame | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Resolve a fixed operational frame from its observed parent pose."""
+
+    position = np.asarray(parent_position, dtype=np.float32)
+    quat = normalize_quat_wxyz(parent_quat_wxyz)
+    if position.shape[-1:] != (3,):
+        raise ValueError(f"Expected parent position shape (..., 3), got {position.shape}")
+    if fixed_frame is None:
+        return position.copy(), quat.copy()
+
+    parent_rotation = quat_to_matrix_wxyz(quat)
+    offset = np.asarray(fixed_frame.xyz, dtype=np.float32)
+    frame_rotation = quat_to_matrix_wxyz(np.asarray(fixed_frame.quat_wxyz, dtype=np.float32))
+    resolved_position = position + np.einsum("...ij,j->...i", parent_rotation, offset)
+    resolved_quat = matrix_to_quat_wxyz(parent_rotation @ frame_rotation)
+    return resolved_position.astype(np.float32, copy=False), resolved_quat.astype(np.float32, copy=False)
