@@ -35,6 +35,7 @@ from PIL import Image
 
 CAMERA_PRESET_CHOICES = [
     "berkeley_eef",
+    "robomind_single",
     "left",
     "right",
     "left_right",
@@ -95,6 +96,16 @@ parser.add_argument(
         "'zero' matches Cosmos3UR5Client; 'observation' is useful when tuning a right camera."
     ),
 )
+parser.add_argument(
+    "--server-left-tile",
+    choices=["zero", "observation"],
+    default="observation",
+    help=(
+        "Left-bottom tile in the saved Cosmos server canvas. 'observation' matches the "
+        "Berkeley/DROID contracts; 'zero' matches single-camera contracts such as robomind_single, "
+        "whose canvas is the top camera over two black tiles."
+    ),
+)
 parser.add_argument("--cosmos-image-height", type=int, default=360, help="Cosmos policy image height.")
 parser.add_argument("--cosmos-image-width", type=int, default=640, help="Cosmos policy image width.")
 parser.add_argument(
@@ -139,7 +150,7 @@ from robolab.registrations.ur5.camera_presets import get_camera_preset  # noqa: 
 from robolab.robots.ur5 import ARM_JOINT_NAMES  # noqa: E402
 
 
-_RESIZE_BACKEND = "local_pillow"
+_RESIZE_BACKEND = "torch_bilinear_stretch (matches training canvas_utils.resize_view and Cosmos3Client)"
 
 
 def _safe_name(value: str) -> str:
@@ -171,36 +182,19 @@ def _as_uint8_rgb(image: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(image)
 
 
-def _resize_with_pad_local(image: np.ndarray, height: int, width: int) -> np.ndarray:
+def _resize_full_view(image: np.ndarray, height: int, width: int) -> np.ndarray:
+    """Plain bilinear stretch to the contract view size, matching Cosmos3Client.
+
+    Training resizes every source view with canvas_utils.resize_view (a straight
+    F.interpolate with no letterboxing), so non-16:9 cameras such as the RoboMIND
+    4:3 top camera must be stretched, not padded, to reproduce the trained frames.
+    """
     image = _as_uint8_rgb(image)
-    pil_image = Image.fromarray(image)
-    cur_width, cur_height = pil_image.size
-    if (cur_height, cur_width) == (height, width):
+    if image.shape[:2] == (height, width):
         return image
-
-    ratio = max(cur_width / width, cur_height / height)
-    resized_width = max(1, int(cur_width / ratio))
-    resized_height = max(1, int(cur_height / ratio))
-    resized = pil_image.resize((resized_width, resized_height), resample=Image.BILINEAR)
-
-    canvas = Image.new("RGB", (width, height), 0)
-    pad_width = max(0, int((width - resized_width) / 2))
-    pad_height = max(0, int((height - resized_height) / 2))
-    canvas.paste(resized, (pad_width, pad_height))
-    return np.asarray(canvas, dtype=np.uint8)
-
-
-def _resize_with_pad(image: np.ndarray, height: int, width: int) -> np.ndarray:
-    global _RESIZE_BACKEND
-    image = _as_uint8_rgb(image)
-    try:
-        from openpi_client import image_tools
-
-        _RESIZE_BACKEND = "openpi_client.image_tools.resize_with_pad"
-        return _as_uint8_rgb(image_tools.resize_with_pad(image, height, width))
-    except Exception:
-        _RESIZE_BACKEND = "local_pillow"
-        return _resize_with_pad_local(image, height, width)
+    tensor = torch.from_numpy(np.ascontiguousarray(image)).permute(2, 0, 1).unsqueeze(0).float()
+    resized = F.interpolate(tensor, size=(height, width), mode="bilinear")
+    return resized.squeeze(0).permute(1, 2, 0).numpy().astype(np.uint8, copy=False)
 
 
 def _resize_for_canvas(image: np.ndarray, *, size: tuple[int, int], dtype: np.dtype) -> np.ndarray:
@@ -252,21 +246,25 @@ def _compose_cosmos_ur5_server_canvas(
     left_image: np.ndarray,
     wrist_image: np.ndarray,
     right_image: np.ndarray,
+    left_tile: str,
     right_tile: str,
     image_h: int,
     image_w: int,
 ) -> np.ndarray:
-    left = _resize_with_pad(left_image, image_h, image_w)
-    wrist = _resize_with_pad(wrist_image, image_h, image_w)
-    right = _resize_with_pad(right_image, image_h, image_w)
+    left = _resize_full_view(left_image, image_h, image_w)
+    wrist = _resize_full_view(wrist_image, image_h, image_w)
+    right = _resize_full_view(right_image, image_h, image_w)
 
     tile_size = (image_h // 2, image_w // 2)
-    left_tile = _resize_for_canvas(left, size=tile_size, dtype=wrist.dtype)
+    if left_tile == "zero":
+        left_tile_image = np.zeros((*tile_size, 3), dtype=wrist.dtype)
+    else:
+        left_tile_image = _resize_for_canvas(left, size=tile_size, dtype=wrist.dtype)
     if right_tile == "zero":
-        right_tile_image = np.zeros_like(left_tile)
+        right_tile_image = np.zeros_like(left_tile_image)
     else:
         right_tile_image = _resize_for_canvas(right, size=tile_size, dtype=wrist.dtype)
-    return np.concatenate((wrist, np.concatenate((left_tile, right_tile_image), axis=1)), axis=0)
+    return np.concatenate((wrist, np.concatenate((left_tile_image, right_tile_image), axis=1)), axis=0)
 
 
 def _compose_client_viz(
@@ -277,9 +275,9 @@ def _compose_client_viz(
     image_h: int,
     image_w: int,
 ) -> np.ndarray:
-    left = _resize_with_pad(left_image, image_h, image_w)
-    wrist = _resize_with_pad(wrist_image, image_h, image_w)
-    right = _resize_with_pad(right_image, image_h, image_w)
+    left = _resize_full_view(left_image, image_h, image_w)
+    wrist = _resize_full_view(wrist_image, image_h, image_w)
+    right = _resize_full_view(right_image, image_h, image_w)
     return np.concatenate((left, wrist, right), axis=1)
 
 
@@ -336,6 +334,7 @@ def _save_capture(obs: dict, env_cfg, output_dir: Path, *, capture_stage: str, e
         left_image=left_raw,
         wrist_image=wrist_raw,
         right_image=right_raw,
+        left_tile=args_cli.server_left_tile,
         right_tile=args_cli.server_right_tile,
         image_h=args_cli.cosmos_image_height,
         image_w=args_cli.cosmos_image_width,
@@ -401,6 +400,7 @@ def _save_capture(obs: dict, env_cfg, output_dir: Path, *, capture_stage: str, e
             "primary_image_key": args_cli.primary_image_key,
             "wrist_image_key": args_cli.wrist_image_key,
             "secondary_image_key": args_cli.secondary_image_key,
+            "left_tile": args_cli.server_left_tile,
             "right_tile": args_cli.server_right_tile,
             "matches_cosmos3_ur5_client": args_cli.server_right_tile == "zero",
         },

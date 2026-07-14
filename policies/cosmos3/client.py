@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn.functional as F
-from openpi_client import image_tools, websocket_client_policy
+from openpi_client import websocket_client_policy
 
 from policies.cosmos3.specs import (
     DEFAULT_CONTROL_FPS,
@@ -210,7 +210,12 @@ class Cosmos3Client(InferenceClient):
             if source not in image_obs:
                 raise KeyError(f"Cosmos3 observation role {role!r} requires image_obs[{source!r}]")
             image = _to_numpy(image_obs[source][env_id])
-            real_images[source] = image_tools.resize_with_pad(image, self._image_h, self._image_w)
+            # Training resizes every source view with a plain bilinear stretch
+            # (canvas_utils.resize_view), never a letterboxed fit, so non-16:9
+            # cameras must reproduce the same trained distortion here.
+            real_images[source] = self._resize_for_canvas(
+                image, size=(self._image_h, self._image_w), dtype=image.dtype
+            )
         if not real_images:
             raise ValueError("Cosmos3 observation preset has no available real camera source")
 
