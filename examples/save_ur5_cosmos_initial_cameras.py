@@ -70,7 +70,18 @@ parser.add_argument(
     "--camera-preset",
     choices=CAMERA_PRESET_CHOICES,
     default="berkeley_eef",
-    help="UR5 camera preset used during registration. Default: berkeley_eef.",
+    help=(
+        "UR5 camera preset used during registration. Use robomind_single with "
+        "--initial-pose-preset robomind_ur5. Default: berkeley_eef."
+    ),
+)
+parser.add_argument(
+    "--initial-pose-preset",
+    default="default",
+    help=(
+        "UR5 reset geometry: default preserves standard RoboLab home; "
+        "robomind_ur5 applies the verified RoboMIND joint pose and base yaw."
+    ),
 )
 parser.add_argument(
     "--primary-image-key",
@@ -147,6 +158,9 @@ from robolab.core.environments.runtime import create_env  # noqa: E402
 from robolab.core.observations.observation_utils import unpack_viewport_cams  # noqa: E402
 from robolab.registrations.ur5.auto_env_registrations_jointpos import auto_register_ur5_envs  # noqa: E402
 from robolab.registrations.ur5.camera_presets import get_camera_preset  # noqa: E402
+from robolab.registrations.ur5.initial_pose_presets import (  # noqa: E402
+    get_ur5_initial_pose_preset,
+)
 from robolab.robots.ur5 import ARM_JOINT_NAMES  # noqa: E402
 
 
@@ -319,6 +333,9 @@ def _save_capture(obs: dict, env_cfg, output_dir: Path, *, capture_stage: str, e
     env_id = args_cli.env_id
     image_obs = _extract_images(obs, "image_obs", env_id=env_id)
     viewport_obs = _extract_images(obs, "viewport_cam", env_id=env_id)
+    proprio_obs = {
+        key: _to_numpy(value[env_id]).tolist() for key, value in obs.get("proprio_obs", {}).items()
+    }
     if args_cli.primary_image_key not in image_obs:
         raise KeyError(
             f"Primary image key {args_cli.primary_image_key!r} is missing from image_obs. "
@@ -383,6 +400,7 @@ def _save_capture(obs: dict, env_cfg, output_dir: Path, *, capture_stage: str, e
         "env_name": args_cli.env,
         "instruction": getattr(env_cfg, "instruction", None),
         "camera_preset": args_cli.camera_preset,
+        "initial_pose_preset": args_cli.initial_pose_preset,
         "task": args_cli.task,
         "task_dirs": args_cli.task_dirs or DEFAULT_TASK_SUBFOLDERS,
         "env_id": env_id,
@@ -417,6 +435,7 @@ def _save_capture(obs: dict, env_cfg, output_dir: Path, *, capture_stage: str, e
         },
         "individual_image_obs": individual_paths,
         "individual_viewport_cam": viewport_paths,
+        "proprio_obs": proprio_obs,
     }
     metadata_path = output_dir / "metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2, default=str) + "\n")
@@ -433,7 +452,14 @@ def main() -> None:
         raise ValueError(f"--settle-seconds must be >= 0, got {args_cli.settle_seconds}")
 
     task_dirs = args_cli.task_dirs or DEFAULT_TASK_SUBFOLDERS
-    auto_register_ur5_envs(task_dirs=task_dirs, task=args_cli.task, cameras=get_camera_preset(args_cli.camera_preset))
+    initial_pose_preset = get_ur5_initial_pose_preset(args_cli.initial_pose_preset)
+    auto_register_ur5_envs(
+        task_dirs=task_dirs,
+        task=args_cli.task,
+        cameras=get_camera_preset(args_cli.camera_preset),
+        initial_arm_joint_positions=initial_pose_preset.arm_joint_positions,
+        initial_root_rot_wxyz=initial_pose_preset.root_rot_wxyz,
+    )
     env_name = _select_env()
     args_cli.env = env_name
 

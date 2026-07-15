@@ -22,7 +22,18 @@ parser.add_argument(
     default="wrist_left_right",
     help=(
         "UR5 camera preset for policy observations (default: wrist_left_right). "
-        "Its canvas contract is checked against the server manifest during handshake."
+        "Use robomind_single together with --initial-pose-preset robomind_ur5; "
+        "standard and Berkeley evaluations normally use the default initial pose. "
+        "The camera canvas contract is checked against the server manifest during handshake."
+    ),
+)
+parser.add_argument(
+    "--initial-pose-preset",
+    default="default",
+    help=(
+        "UR5 simulator reset geometry: default preserves the standard RoboLab home; "
+        "robomind_ur5 applies the verified RoboMIND joint pose and base yaw. "
+        "This setting does not override the model action schema."
     ),
 )
 from robolab.eval.runner import add_common_eval_args, clear_task_filter_for_explicit_paths, run_evaluation
@@ -40,14 +51,21 @@ from policies.cosmos3.client import Cosmos3UR5Client
 from policies.cosmos3.specs import ObservationCapability
 from robolab.registrations.ur5.auto_env_registrations_jointpos import auto_register_ur5_envs
 from robolab.registrations.ur5.camera_presets import get_cosmos3_camera_preset
+from robolab.registrations.ur5.initial_pose_presets import get_ur5_initial_pose_preset
 
 try:
     camera_preset = get_cosmos3_camera_preset(args_cli.camera_preset)
+    initial_pose_preset = get_ur5_initial_pose_preset(args_cli.initial_pose_preset)
 except ValueError as exc:
     simulation_app.close()
     parser.error(str(exc))
 
-auto_register_ur5_envs(task=args_cli.task, cameras=list(camera_preset.cameras))
+auto_register_ur5_envs(
+    task=args_cli.task,
+    cameras=list(camera_preset.cameras),
+    initial_arm_joint_positions=initial_pose_preset.arm_joint_positions,
+    initial_root_rot_wxyz=initial_pose_preset.root_rot_wxyz,
+)
 if clear_task_filter_for_explicit_paths(args_cli):
     logger.debug("Registered explicit task path(s); cleared eval task filter.")
 

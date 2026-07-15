@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import random
 
 import robolab.constants
@@ -16,7 +17,8 @@ def zero_image_like_camera(env, sensor_cfg):
 
 def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity=None, task=None, cameras=None,
                            randomize_background=False, background_seed=None,
-                           env_postfix="UR5eJointPosition"):
+                           env_postfix="UR5eJointPosition", initial_arm_joint_positions=None,
+                           initial_root_rot_wxyz=None):
     """Automatically discover and register tasks with the UR5e robot."""
     from isaaclab.envs import mdp
     from isaaclab.managers import ObservationGroupCfg as ObsGroup
@@ -24,6 +26,7 @@ def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity
     from isaaclab.managers import SceneEntityCfg
     from isaaclab.sensors import CameraCfg
     from isaaclab.utils import configclass
+
     from robolab.core.environments.factory import auto_discover_and_create_cfgs
     from robolab.core.observations.observation_utils import generate_image_obs_from_cameras, generate_obs_cfg
     from robolab.registrations.ur5.camera_presets import BERKELEY_EEF, ZeroOverShoulderRightCameraCfg
@@ -35,6 +38,7 @@ def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity
         WristCameraCfg,
         contact_gripper,
     )
+    from robolab.robots.ur5_profile import ARM_JOINT_NAMES
     from robolab.variations.backgrounds import HomeOfficeBackgroundCfg
     from robolab.variations.camera import EgocentricMirroredCameraCfg
     from robolab.variations.lighting import SphereLightCfg
@@ -92,6 +96,21 @@ def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity
     real_cameras = [camera for camera in cameras if camera is not ZeroOverShoulderRightCameraCfg]
     has_wrist_camera = any(camera is WristCameraCfg for camera in real_cameras)
     robot_cfg = UR5eWithWristCameraCfg if has_wrist_camera else UR5eCfg
+    if initial_arm_joint_positions is not None or initial_root_rot_wxyz is not None:
+        configured_robot = copy.deepcopy(robot_cfg().robot)
+        if initial_arm_joint_positions is not None:
+            if len(initial_arm_joint_positions) != len(ARM_JOINT_NAMES):
+                raise ValueError(
+                    f"Expected {len(ARM_JOINT_NAMES)} UR5 arm joints, got {len(initial_arm_joint_positions)}"
+                )
+            configured_robot.init_state.joint_pos.update(
+                dict(zip(ARM_JOINT_NAMES, map(float, initial_arm_joint_positions)))
+            )
+        if initial_root_rot_wxyz is not None:
+            if len(initial_root_rot_wxyz) != 4:
+                raise ValueError(f"Expected a 4-value root quaternion, got {len(initial_root_rot_wxyz)}")
+            configured_robot.init_state.rot = tuple(map(float, initial_root_rot_wxyz))
+        robot_cfg = type(f"{robot_cfg.__name__}InitialPoseCfg", (robot_cfg,), {"robot": configured_robot})
     scene_cameras = [camera for camera in real_cameras if camera is not WristCameraCfg]
 
     ImageObsCfg = _make_image_obs_cfg(cameras)
