@@ -11,6 +11,7 @@ from robolab.variations.camera import (
     HeadCameraCfg,
     OverShoulderLeftCameraCfg,
     OverShoulderRightCameraCfg,
+    RoboMindGlobalCameraCfg,
     RoboMindTopCameraCfg,
 )
 
@@ -35,9 +36,10 @@ WRIST_LEFT_RIGHT_HEAD = [OverShoulderLeftCameraCfg, OverShoulderRightCameraCfg, 
 # Berkeley policy input is external+wrist+zero. The head camera is kept in image_obs
 # so saved sensor videos retain a DROID-style global panel.
 BERKELEY_EEF = [BerkeleyUR5LeftCameraCfg, ZeroOverShoulderRightCameraCfg, HeadCameraCfg, WristCameraCfg]
-# RoboMIND policy input is the single dataset-style top camera; both auxiliary
-# canvas slots stay black, so no extra physical cameras are registered.
-ROBOMIND_SINGLE = [RoboMindTopCameraCfg]
+# The wide global camera is first so *_0.mp4 sensor mosaics show it on the left.
+# Cosmos3 still selects only robomind_top_camera by role_sources below; the
+# global camera is diagnostic-only and both policy auxiliary slots stay black.
+ROBOMIND_SINGLE = [RoboMindGlobalCameraCfg, RoboMindTopCameraCfg]
 
 CAMERA_PRESETS = {
     "berkeley_eef": BERKELEY_EEF,

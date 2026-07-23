@@ -55,7 +55,7 @@ _PRESET_METADATA = {
         "canvas_shape_hw": (540, 640),
         "view_roles": OBSERVATION_VIEW_ROLES,
         "role_sources": {
-            "primary": "head_camera",
+            "primary": "robomind_top_camera",
             "aux_left": None,
             "aux_right": None,
         },
@@ -178,7 +178,7 @@ def test_camera_preset_carries_matching_observation_capability() -> None:
     robomind_capability.validate(_observation_contract("robomind_single"), _present_view_roles("robomind_single"))
     assert standard_capability.missing_view_policies == ("error", "black")
     assert berkeley_capability.missing_view_policies == ("black",)
-    assert robomind_capability.role_sources["primary"] == "head_camera"
+    assert robomind_capability.role_sources["primary"] == "robomind_top_camera"
     assert robomind_capability.role_sources["aux_left"] is None
     assert robomind_capability.role_sources["aux_right"] is None
     with pytest.raises(ValueError, match="missing role sources"):
@@ -196,7 +196,8 @@ def test_camera_registration_is_the_single_ur5_preset_registry() -> None:
     assert '"wrist_left_right"' in source
     assert '"berkeley_eef"' in source
     assert '"robomind_single"' in source
-    assert '"primary": "head_camera"' in source
+    assert '"primary": "robomind_top_camera"' in source
+    assert "ROBOMIND_SINGLE = [RoboMindGlobalCameraCfg, RoboMindTopCameraCfg]" in source
     assert "get_cosmos3_camera_preset" in source
 
 
@@ -236,9 +237,16 @@ def test_ur5_observation_requires_all_declared_canvas_slots() -> None:
 def test_robomind_observation_maps_overhead_and_synthesizes_missing_views() -> None:
     client = _bare_client(_contract(action_space="joint_position", preset="robomind_single"))
     client._image_h = client._image_w = 4
+    global_view = torch.full((1, 4, 6, 3), 7, dtype=torch.uint8)
     overhead = torch.full((1, 4, 4, 3), 42, dtype=torch.uint8)
 
-    views = client._extract_canvas_views({"head_camera": overhead}, env_id=0)
+    views = client._extract_canvas_views(
+        {
+            "robomind_global_camera": global_view,
+            "robomind_top_camera": overhead,
+        },
+        env_id=0,
+    )
     canvas = client._compose_canvas(views)
 
     np.testing.assert_array_equal(views[0], np.full((4, 4, 3), 42, dtype=np.uint8))
@@ -246,6 +254,7 @@ def test_robomind_observation_maps_overhead_and_synthesizes_missing_views() -> N
     np.testing.assert_array_equal(views[2], np.zeros((4, 4, 3), dtype=np.uint8))
     np.testing.assert_array_equal(canvas[:4], np.full((4, 4, 3), 42, dtype=np.uint8))
     np.testing.assert_array_equal(canvas[4:], np.zeros((2, 4, 3), dtype=np.uint8))
+
 
 
 def test_ur5_joint_contract_never_initializes_eef_bridge() -> None:

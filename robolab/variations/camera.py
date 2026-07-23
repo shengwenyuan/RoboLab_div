@@ -173,21 +173,55 @@ class EgocentricMirroredCameraCfg:
 
 
 @configclass
-class RoboMindTopCameraCfg:
-    """RoboMIND1-UR ``camera_top`` style view: above/behind the arm base, looking down-forward.
+class RoboMindGlobalCameraCfg:
+    """Wide global view used only to make RoboMIND evaluation videos readable.
 
-    Approximates the real RoboMIND UR rig: a 4:3 RGB sensor (640x480, D435-like
-    ~56x44 deg FOV) mounted behind and above the UR5e base, pitched down so the
-    tabletop workspace fills the lower frame and the arm reaches in from the
-    upper center. The 4:3 output is intentional: training stretched the 640x480
-    dataset frames straight to 360x640, and the client canvas resize replicates
+    The camera looks from the side opposite the UR5 base toward the workspace
+    center. Its 16:9 frame has the same 480 px height as ``RoboMindTopCameraCfg``
+    so ``unpack_image_obs`` can concatenate it to the left of the local top view
+    without padding or rescaling one camera relative to the other.
+
+    Pose derivation (env frame, ``OffsetCfg.rot`` ordered as w, x, y, z):
+    pos (1.5, 0, 1.0), look-at (0.5, 0, 0) gives view direction
+    (-0.707, 0, -0.707) and quaternion (0.653, 0.271, 0.271, 0.653).
+    """
+
+    robomind_global_camera = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/robomind_global_camera",
+        height=480,
+        width=864,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=2.1,
+            focus_distance=28.0,
+            horizontal_aperture=5.376,
+            vertical_aperture=3.024,
+        ),
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=(1.5, 0.0, 1.0), rot=(0.653, 0.271, 0.271, 0.653), convention="opengl"
+        ),
+    )
+
+
+@configclass
+class RoboMindTopCameraCfg:
+    """RoboMIND1-UR ``camera_top`` style view: across from the arm base, looking down-back.
+
+    Approximates the real RoboMIND UR rig: a 4:3 RGB sensor (640x480, configured
+    for ~56x44 deg FOV) mounted above the side of the workspace opposite the
+    UR5e base, pitched down toward the robot so the tabletop workspace fills the
+    frame. The source dataset stores 640x480 JPEG frames without camera intrinsics;
+    training stretched them to 360x640, and the client canvas resize replicates
     that same stretch.
 
     Pose derivation (env frame: base at origin, workspace toward +X):
-    pos (0.0, 0, 1.05), look-at (0.62, 0, 0) => view dir (0.509, 0, -0.861),
-    ~59 deg depression, camera over the base so the arm reaches in from the
-    top edge like the dataset view. World-up look-at basis gives camera up
-    (0.861, 0, 0.509). OffsetCfg.rot is (w, x, y, z): (0.682, 0.186, -0.186, -0.682).
+    mirror the old base-side position (0.0, 0, 1.05) about the workspace center
+    x=0.62 to get (1.24, 0, 1.05), then move 0.19 m toward the table along -X
+    so its near edge meets the bottom of the image. The final pos is
+    (1.05, 0, 1.05). Height and the ~59 deg depression stay unchanged. The view
+    direction is (-0.509, 0, -0.861), and the world-up look-at basis gives camera
+    up (-0.861, 0, 0.509). ``OffsetCfg.rot`` is explicitly ordered
+    (w, x, y, z): (0.682, 0.186, 0.186, 0.682).
 
     Tune pose/FOV against real dataset frames with
     ``examples/save_ur5_cosmos_initial_cameras.py --camera-preset robomind_single``.
@@ -204,7 +238,7 @@ class RoboMindTopCameraCfg:
             vertical_aperture=4.032,
         ),
         offset=TiledCameraCfg.OffsetCfg(
-            pos=(0.0, 0.0, 1.05), rot=(0.682, 0.186, -0.186, -0.682), convention="opengl"
+            pos=(1.05, 0.0, 1.05), rot=(0.682, 0.186, 0.186, 0.682), convention="opengl"
         ),
     )
 
