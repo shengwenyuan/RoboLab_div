@@ -10,8 +10,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from robolab.constants import ASSET_DIR as ROBOLAB_ASSET_DIR
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ASSET_DIR = REPO_ROOT / "assets" / "robots" / "ur5e"
+ASSET_DIR = Path(ROBOLAB_ASSET_DIR) / "robots" / "ur5e"
 ARM_URDF = ASSET_DIR / "ur5e_mesh.urdf"
 GRIPPER_URDF = ASSET_DIR / "robotiq_2f_85.urdf"
 ASSEMBLY_URDF = ASSET_DIR / "ur5e_robotiq_2f_85.urdf"
@@ -237,7 +239,17 @@ def test_one_driver_five_mimics_and_nonpenetrating_pad_sweep() -> None:
 
 def test_generated_assembly_is_current_and_arm_is_semantically_unchanged() -> None:
     result = subprocess.run(
-        [sys.executable, str(BUILDER), "--check"],
+        [
+            sys.executable,
+            str(BUILDER),
+            "--arm",
+            str(ARM_URDF),
+            "--gripper",
+            str(GRIPPER_URDF),
+            "--output",
+            str(ASSEMBLY_URDF),
+            "--check",
+        ],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,

@@ -181,6 +181,30 @@ STATELESS_CONDITIONING = ConditioningContract(state_rows=0, history_rows=0, sour
 
 
 @dataclass(frozen=True)
+class DecoderAnchorContract:
+    """Current pose supplied for server-side delta decoding, not conditioning."""
+
+    kind: str
+    frame: str
+    quaternion_order: str
+
+    def __post_init__(self) -> None:
+        if self.kind != "current_eef_pose" or not self.frame or self.quaternion_order != "xyzw":
+            raise ValueError("Cosmos3 decoder anchor must be current_eef_pose in an explicit xyzw frame")
+
+    @classmethod
+    def from_metadata(cls, payload: Mapping[str, Any]) -> DecoderAnchorContract:
+        if not isinstance(payload, Mapping):
+            raise ValueError("Cosmos3 decoder_anchor must be a mapping")
+        _require_fields(payload, {field.name for field in fields(cls)}, "Cosmos3 decoder_anchor")
+        return cls(
+            kind=str(payload["kind"]),
+            frame=str(payload["frame"]),
+            quaternion_order=str(payload["quaternion_order"]),
+        )
+
+
+@dataclass(frozen=True)
 class PolicyContract:
     """Wire contract and selected static dataset-source semantics advertised by a server."""
 
@@ -202,6 +226,7 @@ class PolicyContract:
     pose_mode: str | None
     conditioning: ConditioningContract
     observation: ObservationContract
+    decoder_anchor: DecoderAnchorContract | None = None
 
     def __post_init__(self) -> None:
         if self.protocol_version != POLICY_CONTRACT_VERSION:
@@ -251,8 +276,12 @@ class PolicyContract:
         if self.action_space.startswith("eef_"):
             if self.eef_frame is None or self.quaternion_order is None or self.pose_mode is None:
                 raise ValueError("Cosmos3 EEF contracts require frame, quaternion order, and pose mode")
+            if self.decoder_anchor is None or self.decoder_anchor.frame != self.eef_frame:
+                raise ValueError("Cosmos3 EEF contracts require a decoder anchor in the wire EEF frame")
         elif self.eef_frame is not None or self.quaternion_order is not None:
             raise ValueError("Cosmos3 non-EEF contracts must not define EEF frame or quaternion order")
+        elif self.decoder_anchor is not None:
+            raise ValueError("Cosmos3 non-EEF contracts must not define decoder_anchor")
 
     def to_metadata(self) -> dict[str, Any]:
         return asdict(self)
@@ -279,6 +308,11 @@ class PolicyContract:
             eef_frame=_optional_string(payload.get("eef_frame")),
             quaternion_order=_optional_string(payload.get("quaternion_order")),
             pose_mode=_optional_string(payload.get("pose_mode")),
+            decoder_anchor=(
+                DecoderAnchorContract.from_metadata(payload["decoder_anchor"])
+                if payload.get("decoder_anchor") is not None
+                else None
+            ),
             conditioning=ConditioningContract.from_metadata(payload["conditioning"]),
             observation=ObservationContract.from_metadata(payload["observation"]),
         )

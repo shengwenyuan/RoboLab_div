@@ -9,7 +9,7 @@ from robolab.constants import DEFAULT_TASK_SUBFOLDERS, TASK_DIR
 
 def auto_register_droid_abs_ik_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, task=None, cameras=None,
                                      randomize_background=False, background_seed=None,
-                                     env_postfix=""):
+                                     env_postfix="AbsIK"):
     """Register tasks against ``DroidIKActionCfg`` (absolute end-effector pose IK).
 
     Mirrors :func:`robolab.registrations.droid.auto_env_registrations_jointpos.auto_register_droid_envs`

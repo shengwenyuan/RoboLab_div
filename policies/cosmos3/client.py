@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 import numpy as np
 import torch
@@ -55,6 +56,7 @@ class Cosmos3Client(InferenceClient):
         *,
         capability: ClientCapability,
         control_fps: int = DEFAULT_CONTROL_FPS,
+        execute_horizon: int | None = None,
     ) -> None:
         super().__init__()
         self.capability = capability
@@ -68,7 +70,12 @@ class Cosmos3Client(InferenceClient):
         print(f"[{self.__class__.__name__}] Awaiting for server on {display} to be ready...")
         self.client = self._connect()
         assert self.policy_contract is not None
-        self.open_loop_horizon = self.policy_contract.chunk_size
+        self.execute_horizon = self.policy_contract.chunk_size if execute_horizon is None else int(execute_horizon)
+        if not 1 <= self.execute_horizon <= self.policy_contract.chunk_size:
+            raise ValueError(
+                f"execute_horizon must be in [1, {self.policy_contract.chunk_size}], got {self.execute_horizon}"
+            )
+        self.open_loop_horizon = self.execute_horizon
         print(f"[{self.__class__.__name__}] Connected to {display}.")
 
     def _connect(self) -> websocket_client_policy.WebsocketClientPolicy:
@@ -178,6 +185,9 @@ class Cosmos3Client(InferenceClient):
     def _set_chunk(self, env_id: int, chunk: np.ndarray) -> None:
         assert self.policy_contract is not None
         expanded = expand_action_chunk(chunk, self.policy_contract, control_fps=self.control_fps)
+        execute_horizon = getattr(self, "execute_horizon", self.policy_contract.chunk_size)
+        buffer_horizon = execute_horizon * self.policy_contract.hold_ratio(self.control_fps)
+        expanded = expanded[:buffer_horizon]
         logger.info(
             "[%s] event=action_buffer env_id=%d profile=%s source_chunk_size=%d buffer_steps=%d",
             self.__class__.__name__,
@@ -242,6 +252,107 @@ class Cosmos3Client(InferenceClient):
         return resized.squeeze(0).permute(1, 2, 0).numpy().astype(dtype, copy=False)
 
 
+class EEFControllerAdapter(Protocol):
+    """One-way conversion from canonical EEF wire actions to an env layout."""
+
+    arm_dof: int
+    policy_frame: str
+    controller_frame: str
+    env_action_dim: int
+
+    def convert(self, chunk: np.ndarray) -> np.ndarray:
+        """Convert ``[xyz, quat_xyzw, close]`` into controller actions."""
+
+
+@dataclass(frozen=True)
+class IsaacLabAbsIKAdapter:
+    """Absolute IsaacLab IK adapter for DROID-like and UR5-like arms."""
+
+    arm_dof: int
+    policy_frame: str
+    controller_frame: str
+    controller_from_policy_quat_wxyz: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    env_action_dim: int = 8
+
+    def convert(self, chunk: np.ndarray) -> np.ndarray:
+        action = parse_eef_pose_action(chunk)
+        fixed = np.asarray(self.controller_from_policy_quat_wxyz, dtype=np.float32)
+        quat = _quat_multiply_wxyz(action.quat_wxyz, np.broadcast_to(fixed, action.quat_wxyz.shape))
+        return np.concatenate((action.position, quat, action.gripper), axis=-1).astype(np.float32, copy=False)
+
+
+class Cosmos3EEFClient(Cosmos3Client):
+    """Robot-agnostic canonical EEF client; robot facts live in the adapter."""
+
+    def __init__(
+        self,
+        remote_host: str = "localhost",
+        remote_port: int = 8000,
+        *,
+        capability: ClientCapability,
+        adapter: EEFControllerAdapter,
+        execute_horizon: int = 8,
+        control_fps: int = DEFAULT_CONTROL_FPS,
+        eef_pos_key: str = "eef_pos",
+        eef_quat_key: str = "eef_quat",
+    ) -> None:
+        if adapter.arm_dof != capability.arm_dof:
+            raise ValueError("EEF adapter and client capability arm_dof must match")
+        self.adapter = adapter
+        self._eef_pos_key = eef_pos_key
+        self._eef_quat_key = eef_quat_key
+        super().__init__(
+            remote_host,
+            remote_port,
+            capability=capability,
+            control_fps=control_fps,
+            execute_horizon=execute_horizon,
+        )
+
+    def _validate_policy_contract(self, contract: PolicyContract) -> None:
+        expected = ("x", "y", "z", "qx", "qy", "qz", "qw", "gripper")
+        if contract.action_space != "eef_absolute" or contract.action_layout != expected:
+            raise ValueError("Cosmos3 EEF clients require canonical absolute xyz+quat_xyzw+gripper actions")
+        if (contract.quaternion_order, contract.pose_mode, contract.eef_frame) != (
+            "xyzw",
+            "absolute",
+            self.adapter.policy_frame,
+        ):
+            raise ValueError(
+                "Cosmos3 EEF contract does not match adapter frame/pose convention: "
+                f"server={(contract.eef_frame, contract.quaternion_order, contract.pose_mode)!r}, "
+                f"adapter_frame={self.adapter.policy_frame!r}"
+            )
+
+    def _extract_observation(self, raw_obs: dict, *, env_id: int = 0) -> dict:
+        canvas_views = self._extract_canvas_views(raw_obs["image_obs"], env_id=env_id)
+        proprio = raw_obs["proprio_obs"]
+        position = _to_numpy(proprio[self._eef_pos_key][env_id]).reshape(3).astype(np.float32, copy=False)
+        quat_wxyz = _to_numpy(proprio[self._eef_quat_key][env_id]).reshape(4).astype(np.float32, copy=False)
+        gripper = _optional_proprio(proprio, "gripper_pos", env_id=env_id)
+        gripper = np.zeros(1, dtype=np.float32) if gripper is None else gripper.reshape(1).astype(np.float32)
+        return {
+            "canvas_views": canvas_views,
+            "eef_pose": np.concatenate((position, quat_wxyz_to_xyzw(quat_wxyz))).astype(np.float32),
+            "gripper_position": gripper,
+        }
+
+    def _pack_request(self, extracted_obs: dict, instruction: str) -> dict:
+        return {
+            "observation/image": self._compose_canvas(extracted_obs["canvas_views"]),
+            "observation/eef_pose": _history_row(extracted_obs["eef_pose"]),
+            "observation/gripper_position": _history_row(extracted_obs["gripper_position"]),
+            "prompt": instruction,
+        }
+
+    def _postprocess_chunk(self, chunk: np.ndarray) -> np.ndarray:
+        converted = self.adapter.convert(chunk)
+        expected = (self.policy_contract.chunk_size, self.adapter.env_action_dim)
+        if converted.shape != expected or not np.isfinite(converted).all():
+            raise ValueError(f"EEF adapter returned invalid controller action shape {converted.shape}; expected {expected}")
+        return binarize_close_fraction(converted)
+
+
 class Cosmos3UR5Client(Cosmos3Client):
     """Cosmos3 client that decodes explicit UR5 joint or EEF contracts."""
 
@@ -255,6 +366,7 @@ class Cosmos3UR5Client(Cosmos3Client):
         pinocchio_urdf_path: str | None = None,
         ik_pos_tol: float = 0.005,
         ik_rot_tol: float = 0.05,
+        execute_horizon: int = 8,
     ) -> None:
         self._profile = get_ur5_eef_profile()
         self._env_action_dim = self._profile.env_action_dim + 1
@@ -285,6 +397,7 @@ class Cosmos3UR5Client(Cosmos3Client):
                 observation=observation,
             ),
             control_fps=control_fps,
+            execute_horizon=execute_horizon,
         )
 
     def _validate_policy_contract(self, contract: PolicyContract) -> None:
@@ -510,3 +623,25 @@ def _optional_proprio(proprio_obs: dict, key: str, *, env_id: int) -> np.ndarray
 
 def _history_row(value: np.ndarray) -> np.ndarray:
     return np.asarray(value, dtype=np.float32).reshape(1, -1)
+
+
+def _quat_multiply_wxyz(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
+    """Vectorized Hamilton product for normalized wxyz quaternions."""
+
+    lhs = np.asarray(lhs, dtype=np.float32)
+    rhs = np.asarray(rhs, dtype=np.float32)
+    w1, x1, y1, z1 = np.moveaxis(lhs, -1, 0)
+    w2, x2, y2, z2 = np.moveaxis(rhs, -1, 0)
+    result = np.stack(
+        (
+            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+        ),
+        axis=-1,
+    )
+    norm = np.linalg.norm(result, axis=-1, keepdims=True)
+    if np.any(norm < 1e-8):
+        raise ValueError("EEF frame conversion produced a zero-length quaternion")
+    return result / norm

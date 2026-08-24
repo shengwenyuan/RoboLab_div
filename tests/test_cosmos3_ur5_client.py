@@ -17,6 +17,7 @@ from policies.cosmos3.specs import (
     ObservationCapability,
     ObservationContract,
     PolicyContract,
+    DecoderAnchorContract,
 )
 from robolab.core.motion.eef import MotionBridgeResult
 from robolab.eval.base_client import InferenceClient
@@ -116,6 +117,11 @@ def _contract(
         pose_mode="absolute",
         conditioning=(JOINT_CURRENT_STATE_CONDITIONING if action_space == "joint_position" else STATELESS_CONDITIONING),
         observation=_observation_contract(preset),
+        decoder_anchor=(
+            None
+            if action_space == "joint_position"
+            else DecoderAnchorContract(kind="current_eef_pose", frame=eef_frame, quaternion_order="xyzw")
+        ),
     )
 
 

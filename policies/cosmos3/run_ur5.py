@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 parser = argparse.ArgumentParser(description="Evaluate the Cosmos3 policy backend on UR5e.")
 parser.add_argument("--remote-host", default="localhost", help="Remote host for policy server (default: localhost).")
 parser.add_argument("--remote-port", default=8000, type=int, help="Remote port for policy server (default: 8000).")
+parser.add_argument("--execute-horizon", default=8, type=int, help="Actions to execute before replanning.")
 parser.add_argument(
     "--camera-preset",
     default="wrist_left_right",
@@ -76,6 +77,7 @@ def make_client(args: argparse.Namespace) -> Cosmos3UR5Client:
         remote_host=args.remote_host,
         remote_port=args.remote_port,
         observation=ObservationCapability.from_mapping(camera_preset.observation_metadata()),
+        execute_horizon=args.execute_horizon,
     )
 
 
