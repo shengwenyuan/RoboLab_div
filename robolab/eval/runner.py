@@ -137,6 +137,9 @@ def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
                         choices=["all", "viewport", "sensor", "none"],
                         help=("Which videos to save: 'all' (sensor + viewport), "
                               "'viewport' only, 'sensor' only, or 'none' (default: all)."))
+    parser.add_argument("--renderer", dest="robolab_renderer", type=str, default="realtime",
+                        choices=["realtime", "pathtracing"],
+                        help="RTX renderer mode (default: realtime).")
     parser.add_argument("--randomize-contact-pose", "--randomize_contact_pose", action="store_true",
                         help=("Randomize movable contact object poses at each episode reset. "
                               "Objects are selected from env_cfg.contact_object_list and filtered "
@@ -291,6 +294,8 @@ def run_evaluation(
             instruction_type=args.instruction_type,
             policy=policy,
             events=eval_events,
+            renderer=args.robolab_renderer,
+            rendering_mode=args.rendering_mode,
         )
 
         client = client_factory(args)

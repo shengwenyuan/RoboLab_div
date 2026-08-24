@@ -31,7 +31,10 @@ from robolab.constants import ROBOTS_DIR
 #   - examples/run_abs_ik_demo.py (converts eef_frame targets → base_link IK actions)
 # Kept here so all code agrees on what eef_frame is.
 EEF_OFFSET_POS: tuple[float, float, float] = (0.0, 0.0, 0.0)
+# Policy/controller math keeps the historical wxyz convention. Isaac Lab 3
+# configuration values are converted to xyzw only where they are consumed.
 EEF_OFFSET_ROT: tuple[float, float, float, float] = (0.5, -0.5, 0.5, -0.5)
+EEF_OFFSET_ROT_CFG = (*EEF_OFFSET_ROT[1:], EEF_OFFSET_ROT[0])
 
 _frame_marker_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/TF")
 _frame_marker_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
@@ -52,7 +55,7 @@ _WRIST_CAM = TiledCameraCfg(
         vertical_aperture=3.024,
     ),
     offset=TiledCameraCfg.OffsetCfg(
-        pos=(0.011, -0.031, -0.074), rot=(-0.420, 0.570, 0.576, -0.409), convention="opengl"
+        pos=(0.011, -0.031, -0.074), rot=(0.570, 0.576, -0.409, -0.420), convention="opengl"
     ),
 )
 
@@ -78,7 +81,7 @@ class DroidCfg:
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0, 0, 0),
-            rot=(1, 0, 0, 0),
+            rot=(0, 0, 0, 1),
             joint_pos={
                 "panda_joint1": 0.0,
                 "panda_joint2": -1 / 5 * np.pi,
@@ -148,7 +151,7 @@ class DroidCfg:
             FrameTransformerCfg.FrameCfg(
                 prim_path="{ENV_REGEX_NS}/robot/Gripper/Robotiq_2F_85/base_link",
                 name="eef_frame",
-                offset=OffsetCfg(pos=EEF_OFFSET_POS, rot=EEF_OFFSET_ROT),
+                offset=OffsetCfg(pos=EEF_OFFSET_POS, rot=EEF_OFFSET_ROT_CFG),
             ),
         ],
     )

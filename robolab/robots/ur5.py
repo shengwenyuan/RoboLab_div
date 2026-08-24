@@ -58,7 +58,7 @@ _WRIST_CAM = TiledCameraCfg(
     ),
     offset=TiledCameraCfg.OffsetCfg(
         pos=(-0.19, 0.0, -0.005),
-        rot=(-0.270598, 0.6532815, 0.6532815, -0.270598),  # w, x, y, z
+        rot=(0.6532815, 0.6532815, -0.270598, -0.270598),  # x, y, z, w
         convention="opengl",
     ),
 )
@@ -81,9 +81,8 @@ class UR5eCfg:
             # misleading field name.  True creates one driven master plus five
             # PhysxMimicJointAPI followers instead of six competing drives.
             convert_mimic_joints_to_normal_joints=True,
-            # Preserve IsaacLab's convex-hull import default used by the UR5e.
-            # The gripper URDF supplies its own deliberately simple pad boxes.
-            collider_type="convex_hull",
+            # Isaac Lab 3 removed collider_type; its URDF importer retains the
+            # convex-hull default. The gripper URDF supplies simple pad boxes.
             self_collision=True,
             # The importer otherwise creates very soft mimic constraints
             # (25 Hz, damping ratio 0.005), allowing external contact to spread
@@ -111,7 +110,7 @@ class UR5eCfg:
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0, 0, 0),
-            rot=(1, 0, 0, 0),
+            rot=(0, 0, 0, 1),
             joint_pos=UR5E_HOME_JOINT_POS.copy(),
         ),
         soft_joint_pos_limit_factor=1,

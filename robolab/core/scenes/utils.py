@@ -22,6 +22,14 @@ from robolab.core.utils.debug_utils import get_caller_info
 ACCEPTED_SCENE_EXTENSIONS = (".usda", ".usdc", ".usdz", ".usd")
 
 
+def _usd_quat_wxyz_to_isaaclab_xyzw(
+    quat: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    """Convert PXR/USD wxyz rotation to Isaac Lab 3 config xyzw."""
+    w, x, y, z = quat
+    return (x, y, z, w)
+
+
 def find_scene_file(scene_path: str, scene_dir: str, ignore_directories: list[str] = ["not_used", "tmp"]) -> str:
     """Recursively search for a scene file matching the given path.
 
@@ -130,7 +138,7 @@ def _scrape_scene_cached(scene_path: str, objects_of_interest_tuple: tuple = Non
             spawn=None,
             init_state=RigidObjectCfg.InitialStateCfg(
                 pos=obj_info['position'],
-                rot=obj_info['rotation'],
+                rot=_usd_quat_wxyz_to_isaaclab_xyzw(obj_info['rotation']),
                 lin_vel=(0.0, 0.0, 0.0),
                 ang_vel=(0.0, 0.0, 0.0),
             ),

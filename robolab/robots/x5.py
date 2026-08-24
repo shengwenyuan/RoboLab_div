@@ -35,6 +35,7 @@ ROBOT_ROOT = "{ENV_REGEX_NS}/robot/root_joint"
 # Midpoint between the two finger joint origins in link6 coordinates.
 EEF_OFFSET_POS: tuple[float, float, float] = (0.08657, -0.000002, -0.00024363)
 EEF_OFFSET_ROT: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+EEF_OFFSET_ROT_CFG = (*EEF_OFFSET_ROT[1:], EEF_OFFSET_ROT[0])
 
 _frame_marker_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/TF")
 _frame_marker_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
@@ -51,7 +52,7 @@ _WRIST_CAM = TiledCameraCfg(
         vertical_aperture=3.024,
     ),
     offset=TiledCameraCfg.OffsetCfg(
-        pos=(0.09, 0.0, 0.04), rot=(0.5, -0.5, 0.5, -0.5), convention="opengl"
+        pos=(0.09, 0.0, 0.04), rot=(-0.5, 0.5, -0.5, 0.5), convention="opengl"
     ),
 )
 
@@ -77,7 +78,7 @@ class X5Cfg:
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0, 0, 0),
-            rot=(1, 0, 0, 0),
+            rot=(0, 0, 0, 1),
             joint_pos={
                 "joint1": 0.0,
                 "joint2": 0.0,
@@ -129,7 +130,7 @@ class X5Cfg:
             FrameTransformerCfg.FrameCfg(
                 prim_path=f"{ROBOT_ROOT}/link6",
                 name="eef_frame",
-                offset=OffsetCfg(pos=EEF_OFFSET_POS, rot=EEF_OFFSET_ROT),
+                offset=OffsetCfg(pos=EEF_OFFSET_POS, rot=EEF_OFFSET_ROT_CFG),
             ),
         ],
     )

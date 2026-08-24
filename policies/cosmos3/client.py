@@ -11,7 +11,8 @@ from typing import Any, Protocol
 import numpy as np
 import torch
 import torch.nn.functional as F
-from openpi_client import websocket_client_policy
+
+from policies.cosmos3.openpi_compat import WebsocketClientPolicy
 
 from policies.cosmos3.specs import (
     DEFAULT_CONTROL_FPS,
@@ -78,8 +79,8 @@ class Cosmos3Client(InferenceClient):
         self.open_loop_horizon = self.execute_horizon
         print(f"[{self.__class__.__name__}] Connected to {display}.")
 
-    def _connect(self) -> websocket_client_policy.WebsocketClientPolicy:
-        client = websocket_client_policy.WebsocketClientPolicy(self._remote_host, self._remote_port)
+    def _connect(self) -> WebsocketClientPolicy:
+        client = WebsocketClientPolicy(self._remote_host, self._remote_port)
         actual = validate_server_metadata(client.get_server_metadata(), self.capability)
         self._validate_policy_contract(actual)
         actual.hold_ratio(self.control_fps)
