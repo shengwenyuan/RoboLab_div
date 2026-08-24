@@ -373,6 +373,26 @@ class StreamingHDF5DatasetFileHandler(DatasetFileHandlerBase):
     # Internal helpers
     # ========================================================================
 
+    _warned_nontensor_keys: set = set()
+
+    @staticmethod
+    def _leaf_to_numpy(group, key, value):
+        """Convert tensor and Isaac Lab 3 list leaves for HDF5 storage."""
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().numpy()
+
+        field_path = "/".join(p for p in f"{group.name}/{key}".split("/") if not p.startswith("demo_"))
+        if field_path not in StreamingHDF5DatasetFileHandler._warned_nontensor_keys:
+            StreamingHDF5DatasetFileHandler._warned_nontensor_keys.add(field_path)
+            print(
+                f"[StreamingHDF5] non-tensor recorder leaf at {field_path}: "
+                f"type={type(value).__name__}; coercing to numpy."
+            )
+
+        if isinstance(value, (list, tuple)) and value and isinstance(value[0], torch.Tensor):
+            return torch.stack(list(value)).detach().cpu().numpy()
+        return np.asarray(value)
+
     @staticmethod
     def _append_to_dataset(group, key, value, datasets_cache):
         """Append data to a resizable HDF5 dataset, creating it if needed."""
@@ -386,7 +406,7 @@ class StreamingHDF5DatasetFileHandler(DatasetFileHandlerBase):
                     key_group, sub_key, sub_value, datasets_cache
                 )
         else:
-            np_data = value.cpu().numpy()
+            np_data = StreamingHDF5DatasetFileHandler._leaf_to_numpy(group, key, value)
             cache_key = f"{group.name}/{key}"
 
             if cache_key in datasets_cache:

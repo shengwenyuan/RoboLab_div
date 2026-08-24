@@ -65,8 +65,8 @@ def test_droid_and_ur5_abs_ik_adapters_share_only_the_canonical_wire_chunk() -> 
         controller_frame="tool0",
     ).convert(chunk)
 
-    np.testing.assert_allclose(droid_result[:, 3:7], [[0.5, 0.5, -0.5, 0.5]] * 2, atol=1e-6)
-    np.testing.assert_allclose(ur5_result[:, 3:7], [[1.0, 0.0, 0.0, 0.0]] * 2, atol=1e-6)
+    np.testing.assert_allclose(droid_result[:, 3:7], [[0.5, -0.5, 0.5, 0.5]] * 2, atol=1e-6)
+    np.testing.assert_allclose(ur5_result[:, 3:7], [[0.0, 0.0, 0.0, 1.0]] * 2, atol=1e-6)
     np.testing.assert_allclose(droid_result[:, 7], ur5_result[:, 7])
 
 

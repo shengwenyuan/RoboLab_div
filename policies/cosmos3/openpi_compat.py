@@ -90,3 +90,6 @@ class WebsocketClientPolicy:
 
     def reset(self) -> None:
         pass
+
+    def close(self) -> None:
+        self._ws.close()

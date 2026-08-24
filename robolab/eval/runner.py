@@ -365,6 +365,7 @@ def run_evaluation(
             env.reset_eval_state()
             run_idx += 1
 
+        client.close()
         env.close()
 
     summarize_experiment_results(episode_results, show_timing=True)

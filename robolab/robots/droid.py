@@ -232,7 +232,7 @@ def ee_pos(
 def ee_quat(
     env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ):
-    """Returns the end effector orientation as quaternion (w, x, y, z) in the world frame."""
+    """Returns the end effector orientation as quaternion (x, y, z, w) in the world frame."""
     robot = env.scene[asset_cfg.name]
     # Get the body index for the end effector link
     ee_body_name = "base_link"  # Robotiq gripper base link
@@ -249,7 +249,7 @@ def eef_pos(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("
 
 
 def eef_quat(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("frames")):
-    """Returns the eef_frame orientation as quaternion (w, x, y, z) in the world frame."""
+    """Returns the eef_frame orientation as quaternion (x, y, z, w) in the world frame."""
     frames = env.scene[asset_cfg.name]
     idx = frames.data.target_frame_names.index("eef_frame")
     return frames.data.target_quat_w[:, idx, :]

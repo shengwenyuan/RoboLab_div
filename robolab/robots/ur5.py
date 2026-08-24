@@ -182,7 +182,7 @@ def ee_pos(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("r
 
 
 def ee_quat(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
-    """Returns the UR tool frame orientation as quaternion (w, x, y, z)."""
+    """Returns the UR tool frame orientation as quaternion (x, y, z, w)."""
     robot = env.scene[asset_cfg.name]
     body_idx = _body_index(robot, ["tool0", "flange", "wrist_3_link"])
     return robot.data.body_quat_w[:, body_idx, :]

@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import isaaclab.envs.mdp as mdp
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
+
+from robolab.core.observations.observation_utils import _image_observation_func
 
 
 @configclass
@@ -15,7 +16,7 @@ class CameraObservationCfg:
     class ImageObsCfg(ObsGroup):
         """Observations for policy."""
         egocentric_wide_angle_camera = ObsTerm(
-            func=mdp.observations.image,
+            func=_image_observation_func(),
             params={
                 "sensor_cfg": SceneEntityCfg("egocentric_wide_angle_camera"),
                 "data_type": "rgb",
@@ -24,7 +25,7 @@ class CameraObservationCfg:
             )
 
         egocentric_mirrored_wide_angle_camera = ObsTerm(
-            func=mdp.observations.image,
+            func=_image_observation_func(),
             params={
                 "sensor_cfg": SceneEntityCfg("egocentric_mirrored_camera"),
                 "data_type": "rgb",

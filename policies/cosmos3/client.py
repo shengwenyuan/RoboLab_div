@@ -30,6 +30,7 @@ from policies.cosmos3.specs import (
 from robolab.core.motion.eef import (
     EEFPolicyObservation,
     parse_eef_pose_action,
+    quat_xyzw_to_wxyz,
     quat_wxyz_to_xyzw,
     resolve_operational_frame_pose,
 )
@@ -97,6 +98,9 @@ class Cosmos3Client(InferenceClient):
             actual.chunk_size,
         )
         return client
+
+    def close(self) -> None:
+        self.client.close()
 
     def _validate_policy_contract(self, contract: PolicyContract) -> None:
         """Subclass hook for action codecs beyond generic joint position."""
@@ -267,7 +271,7 @@ class EEFControllerAdapter(Protocol):
 
 @dataclass(frozen=True)
 class IsaacLabAbsIKAdapter:
-    """Absolute IsaacLab IK adapter for DROID-like and UR5-like arms."""
+    """Absolute Isaac Lab 3 IK adapter with xyzw controller output."""
 
     arm_dof: int
     policy_frame: str
@@ -278,8 +282,9 @@ class IsaacLabAbsIKAdapter:
     def convert(self, chunk: np.ndarray) -> np.ndarray:
         action = parse_eef_pose_action(chunk)
         fixed = np.asarray(self.controller_from_policy_quat_wxyz, dtype=np.float32)
-        quat = _quat_multiply_wxyz(action.quat_wxyz, np.broadcast_to(fixed, action.quat_wxyz.shape))
-        return np.concatenate((action.position, quat, action.gripper), axis=-1).astype(np.float32, copy=False)
+        quat_wxyz = _quat_multiply_wxyz(action.quat_wxyz, np.broadcast_to(fixed, action.quat_wxyz.shape))
+        quat_xyzw = quat_wxyz_to_xyzw(quat_wxyz)
+        return np.concatenate((action.position, quat_xyzw, action.gripper), axis=-1).astype(np.float32, copy=False)
 
 
 class Cosmos3EEFClient(Cosmos3Client):
@@ -329,12 +334,12 @@ class Cosmos3EEFClient(Cosmos3Client):
         canvas_views = self._extract_canvas_views(raw_obs["image_obs"], env_id=env_id)
         proprio = raw_obs["proprio_obs"]
         position = _to_numpy(proprio[self._eef_pos_key][env_id]).reshape(3).astype(np.float32, copy=False)
-        quat_wxyz = _to_numpy(proprio[self._eef_quat_key][env_id]).reshape(4).astype(np.float32, copy=False)
+        quat_xyzw = _to_numpy(proprio[self._eef_quat_key][env_id]).reshape(4).astype(np.float32, copy=False)
         gripper = _optional_proprio(proprio, "gripper_pos", env_id=env_id)
         gripper = np.zeros(1, dtype=np.float32) if gripper is None else gripper.reshape(1).astype(np.float32)
         return {
             "canvas_views": canvas_views,
-            "eef_pose": np.concatenate((position, quat_wxyz_to_xyzw(quat_wxyz))).astype(np.float32),
+            "eef_pose": np.concatenate((position, quat_xyzw)).astype(np.float32),
             "gripper_position": gripper,
         }
 
@@ -496,19 +501,20 @@ class Cosmos3UR5Client(Cosmos3Client):
         eef_pos = None
         eef_quat_xyzw = None
         if ee_pos is not None and ee_quat is not None:
-            eef_pos, ee_quat = resolve_operational_frame_pose(
+            ee_quat_wxyz = quat_xyzw_to_wxyz(ee_quat.reshape(4))
+            eef_pos, ee_quat_wxyz = resolve_operational_frame_pose(
                 ee_pos.reshape(3),
-                ee_quat.reshape(4),
+                ee_quat_wxyz,
                 self._profile.fixed_operational_frame,
             )
-            eef_quat_xyzw = quat_wxyz_to_xyzw(ee_quat).astype(np.float32, copy=False)
+            eef_quat_xyzw = quat_wxyz_to_xyzw(ee_quat_wxyz).astype(np.float32, copy=False)
             eef_observation = EEFPolicyObservation(
                 primary_image=aux_left_image,
                 wrist_image=primary_image,
                 secondary_image=aux_right_image,
                 joint_position=arm_joint_position,
                 ee_pos=eef_pos,
-                ee_quat_wxyz=ee_quat,
+                ee_quat_wxyz=ee_quat_wxyz,
                 gripper_position=gripper_position,
                 metadata={
                     "profile": self._profile.name,

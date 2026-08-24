@@ -20,7 +20,6 @@ def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity
                            env_postfix="UR5eJointPosition", initial_arm_joint_positions=None,
                            initial_root_rot_wxyz=None):
     """Automatically discover and register tasks with the UR5e robot."""
-    from isaaclab.envs import mdp
     from isaaclab.managers import ObservationGroupCfg as ObsGroup
     from isaaclab.managers import ObservationTermCfg as ObsTerm
     from isaaclab.managers import SceneEntityCfg
@@ -28,7 +27,11 @@ def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity
     from isaaclab.utils import configclass
 
     from robolab.core.environments.factory import auto_discover_and_create_cfgs
-    from robolab.core.observations.observation_utils import generate_image_obs_from_cameras, generate_obs_cfg
+    from robolab.core.observations.observation_utils import (
+        _image_observation_func,
+        generate_image_obs_from_cameras,
+        generate_obs_cfg,
+    )
     from robolab.registrations.ur5.camera_presets import BERKELEY_EEF, ZeroOverShoulderRightCameraCfg
     from robolab.robots.ur5 import (
         ProprioceptionObservationCfg,
@@ -83,7 +86,7 @@ def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity
                     ImageObsCfg,
                     attr_name,
                     ObsTerm(
-                        func=mdp.observations.image,
+                        func=_image_observation_func(),
                         params={
                             "sensor_cfg": SceneEntityCfg(attr_name),
                             "data_type": "rgb",
@@ -109,7 +112,8 @@ def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity
         if initial_root_rot_wxyz is not None:
             if len(initial_root_rot_wxyz) != 4:
                 raise ValueError(f"Expected a 4-value root quaternion, got {len(initial_root_rot_wxyz)}")
-            configured_robot.init_state.rot = tuple(map(float, initial_root_rot_wxyz))
+            root_wxyz = tuple(map(float, initial_root_rot_wxyz))
+            configured_robot.init_state.rot = (*root_wxyz[1:], root_wxyz[0])
         robot_cfg = type(f"{robot_cfg.__name__}InitialPoseCfg", (robot_cfg,), {"robot": configured_robot})
     scene_cameras = [camera for camera in real_cameras if camera is not WristCameraCfg]
 

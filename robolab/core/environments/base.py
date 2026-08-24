@@ -161,20 +161,30 @@ class RobolabDefaultEnvCfg(ManagerBasedRLEnvCfg):
         self.scene.env_spacing = 2.0
         self.sim.use_fabric = True
 
-        # PhysX settings
-        self.sim.physx.gpu_temp_buffer_capacity = 2**30
-        self.sim.physx.gpu_heap_capacity = 2**30
-        self.sim.physx.gpu_collision_stack_size = 2**30
-        self.sim.physx.enable_ccd = True
-        self.sim.physx.contact_offset = 0.02
-        self.sim.physx.rest_offset = 0.01
-        self.sim.physx.num_position_iterations = 32
-        self.sim.physx.num_velocity_iterations = 1
-        self.sim.physx.bounce_threshold_velocity = 0.2
-        self.sim.physx.max_depenetration_velocity = 100.0
-        self.sim.physx.solver_type = 1
-        self.sim.physx.num_threads = 4
-        self.sim.physx.relaxation = 0.75
-        self.sim.physx.warm_start = 0.4
-        self.sim.physx.shape_collision_distance = 0.0
-        self.sim.physx.shape_collision_margin = 0.0
+        # PhysX moved out of SimulationCfg in Isaac Lab 3. Keep the legacy
+        # tuning when that schema is available and otherwise use 6.0 defaults.
+        physx = getattr(self.sim, "physx", None)
+        physx_settings = {
+            "gpu_temp_buffer_capacity": 2**30,
+            "gpu_heap_capacity": 2**30,
+            "gpu_collision_stack_size": 2**30,
+            "enable_ccd": True,
+            "contact_offset": 0.02,
+            "rest_offset": 0.01,
+            "num_position_iterations": 32,
+            "num_velocity_iterations": 1,
+            "max_position_iteration_count": 32,
+            "max_velocity_iteration_count": 1,
+            "bounce_threshold_velocity": 0.2,
+            "max_depenetration_velocity": 100.0,
+            "solver_type": 1,
+            "num_threads": 4,
+            "relaxation": 0.75,
+            "warm_start": 0.4,
+            "shape_collision_distance": 0.0,
+            "shape_collision_margin": 0.0,
+        }
+        if physx is not None:
+            for attr_name, value in physx_settings.items():
+                if hasattr(physx, attr_name):
+                    setattr(physx, attr_name, value)

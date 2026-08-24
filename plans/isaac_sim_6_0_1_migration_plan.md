@@ -28,5 +28,11 @@ Stop immediately on renderer crash, GPU reset/Xid, invalid transforms, non-finit
 
 ## Outputs
 
-- Logs and videos: `output/cosmos3_eef_iter3500_banana_isaac601/`.
+- Final logs and video: `output/cosmos3_eef_iter3500_banana_isaac601_xyzw/`.
 - Migration code remains small and version-boundary focused; commit only after G1, then record later gates separately.
+
+## Result
+
+- G0-G3 passed; G4 completed a full 750-step rollout and produced a valid viewport MP4.
+- The task result was `success: false`: the policy did not contact the banana. This is an evaluation result, not a weakened gate.
+- Isaac Lab 3 controller and observation quaternion boundaries are `xyzw`; policy and simulator now agree.
