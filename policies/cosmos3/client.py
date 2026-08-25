@@ -31,6 +31,7 @@ from robolab.core.motion.eef import (
     EEFPolicyObservation,
     parse_eef_pose_action,
     quat_xyzw_to_wxyz,
+    quat_to_matrix_wxyz,
     quat_wxyz_to_xyzw,
     resolve_operational_frame_pose,
 )
@@ -271,20 +272,25 @@ class EEFControllerAdapter(Protocol):
 
 @dataclass(frozen=True)
 class IsaacLabAbsIKAdapter:
-    """Absolute Isaac Lab 3 IK adapter with xyzw controller output."""
+    """Compose a fixed policy-frame-to-controller transform for absolute IK."""
 
     arm_dof: int
     policy_frame: str
     controller_frame: str
-    controller_from_policy_quat_wxyz: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    controller_in_policy_xyz: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    controller_in_policy_quat_wxyz: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
     env_action_dim: int = 8
 
     def convert(self, chunk: np.ndarray) -> np.ndarray:
         action = parse_eef_pose_action(chunk)
-        fixed = np.asarray(self.controller_from_policy_quat_wxyz, dtype=np.float32)
+        offset = np.asarray(self.controller_in_policy_xyz, dtype=np.float32)
+        position = action.position + np.einsum(
+            "nij,j->ni", quat_to_matrix_wxyz(action.quat_wxyz), offset
+        )
+        fixed = np.asarray(self.controller_in_policy_quat_wxyz, dtype=np.float32)
         quat_wxyz = _quat_multiply_wxyz(action.quat_wxyz, np.broadcast_to(fixed, action.quat_wxyz.shape))
         quat_xyzw = quat_wxyz_to_xyzw(quat_wxyz)
-        return np.concatenate((action.position, quat_xyzw, action.gripper), axis=-1).astype(np.float32, copy=False)
+        return np.concatenate((position, quat_xyzw, action.gripper), axis=-1).astype(np.float32, copy=False)
 
 
 class Cosmos3EEFClient(Cosmos3Client):

@@ -36,6 +36,16 @@ EEF_OFFSET_POS: tuple[float, float, float] = (0.0, 0.0, 0.0)
 EEF_OFFSET_ROT: tuple[float, float, float, float] = (0.5, -0.5, 0.5, -0.5)
 EEF_OFFSET_ROT_CFG = (*EEF_OFFSET_ROT[1:], EEF_OFFSET_ROT[0])
 
+# Pose of the Robotiq base_link controller frame expressed in the DROID
+# policy's panda_link8 flange frame. Values come from the pinned robot USD.
+PANDA_LINK8_TO_BASE_POS: tuple[float, float, float] = (0.0, 0.0, 0.018174022)
+PANDA_LINK8_TO_BASE_ROT: tuple[float, float, float, float] = (
+    0.0,
+    0.7071067811865476,
+    0.0,
+    0.7071067811865476,
+)
+
 _frame_marker_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/TF")
 _frame_marker_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
 
@@ -142,7 +152,7 @@ class DroidCfg:
                 prim_path=f"{{ENV_REGEX_NS}}/robot/panda_link{i}",
                 name=f"panda_link{i}",
             )
-            for i in range(8)
+            for i in range(9)
         ] + [
             FrameTransformerCfg.FrameCfg(
                 prim_path="{ENV_REGEX_NS}/robot/Gripper/Robotiq_2F_85/base_link",
@@ -252,6 +262,20 @@ def eef_quat(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg(
     """Returns the eef_frame orientation as quaternion (x, y, z, w) in the world frame."""
     frames = env.scene[asset_cfg.name]
     idx = frames.data.target_frame_names.index("eef_frame")
+    return frames.data.target_quat_w[:, idx, :]
+
+
+def panda_link8_pos(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("frames")):
+    """Returns the DROID policy flange position in the env-local frame."""
+    frames = env.scene[asset_cfg.name]
+    idx = frames.data.target_frame_names.index("panda_link8")
+    return frames.data.target_pos_w[:, idx, :] - env.scene.env_origins[:, 0:3]
+
+
+def panda_link8_quat(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("frames")):
+    """Returns the DROID policy flange orientation as xyzw."""
+    frames = env.scene[asset_cfg.name]
+    idx = frames.data.target_frame_names.index("panda_link8")
     return frames.data.target_quat_w[:, idx, :]
 
 ########################################################
@@ -386,11 +410,14 @@ class ProprioceptionObservationCfg(ObsGroup):
     gripper_pos = ObsTerm(
         func=gripper_pos, noise=noise.GaussianNoiseCfg(std=0.05), clip=(0, 1)
     )
-    # ee_*: base_link (gripper mount flange). eef_*: eef_frame (EE control frame, R_offset rotated).
+    # ee_*: Robotiq base_link. eef_*: rotated legacy control frame.
+    # panda_link8_*: DROID training-policy flange frame.
     ee_pos = ObsTerm(func=ee_pos)
     ee_quat = ObsTerm(func=ee_quat)
     eef_pos = ObsTerm(func=eef_pos)
     eef_quat = ObsTerm(func=eef_quat)
+    panda_link8_pos = ObsTerm(func=panda_link8_pos)
+    panda_link8_quat = ObsTerm(func=panda_link8_quat)
 
     def __post_init__(self) -> None:
         self.enable_corruption = False # must include

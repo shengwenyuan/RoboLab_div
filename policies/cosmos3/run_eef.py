@@ -27,7 +27,7 @@ from policies.cosmos3.client import Cosmos3EEFClient, IsaacLabAbsIKAdapter
 from policies.cosmos3.specs import STATELESS_CONDITIONING, ClientCapability, STANDARD_THREE_VIEW_OBSERVATION
 from robolab.registrations.droid.auto_env_registrations_abs_ik import auto_register_droid_abs_ik_envs
 from robolab.registrations.droid.camera_presets import WRIST_LEFT_RIGHT_HEAD
-from robolab.robots.droid import EEF_OFFSET_ROT
+from robolab.robots.droid import PANDA_LINK8_TO_BASE_POS, PANDA_LINK8_TO_BASE_ROT
 
 CAPABILITY = ClientCapability(
     robot="droid",
@@ -37,12 +37,12 @@ CAPABILITY = ClientCapability(
     conditioning_by_action_space={"eef_absolute": STATELESS_CONDITIONING},
     observation=STANDARD_THREE_VIEW_OBSERVATION,
 )
-offset_inverse = (EEF_OFFSET_ROT[0], *(-value for value in EEF_OFFSET_ROT[1:]))
 ADAPTER = IsaacLabAbsIKAdapter(
     arm_dof=7,
-    policy_frame="droid_eef",
+    policy_frame="panda_link8",
     controller_frame="base_link",
-    controller_from_policy_quat_wxyz=offset_inverse,
+    controller_in_policy_xyz=PANDA_LINK8_TO_BASE_POS,
+    controller_in_policy_quat_wxyz=PANDA_LINK8_TO_BASE_ROT,
 )
 
 auto_register_droid_abs_ik_envs(task=args_cli.task, cameras=WRIST_LEFT_RIGHT_HEAD)
@@ -56,6 +56,8 @@ def make_client(args: argparse.Namespace) -> Cosmos3EEFClient:
         capability=CAPABILITY,
         adapter=ADAPTER,
         execute_horizon=args.execute_horizon,
+        eef_pos_key="panda_link8_pos",
+        eef_quat_key="panda_link8_quat",
     )
 
 
