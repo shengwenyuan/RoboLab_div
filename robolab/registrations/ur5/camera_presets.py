@@ -114,6 +114,17 @@ COSMOS3_CAMERA_PRESETS = {
         },
         missing_view_policies=("black",),
     ),
+    "rh20t_vertical_pair": Cosmos3CameraPreset(
+        cameras=tuple(LEFT_RIGHT),
+        layout_id="vertical_pair",
+        view_roles=("primary", "aux_left"),
+        role_sources={
+            "primary": "over_shoulder_left_camera",
+            "aux_left": "over_shoulder_right_camera",
+        },
+        missing_view_policies=("error",),
+        canvas_shape_hw=(720, 640),
+    ),
     "wrist_left_right": Cosmos3CameraPreset(cameras=tuple(WRIST_LEFT_RIGHT), **_THREE_REAL_VIEWS),
     "wrist_left_right_head": Cosmos3CameraPreset(cameras=tuple(WRIST_LEFT_RIGHT_HEAD), **_THREE_REAL_VIEWS),
 }

@@ -38,12 +38,27 @@ from robolab.core.motion.eef import (
 from robolab.core.motion.pinocchio import PinocchioIKBridge
 from robolab.eval.base_client import InferenceClient
 from robolab.robots.ur5_profile import (
+    ARM_JOINT_NAMES,
     UR5E_PINOCCHIO_URDF_PATH,
     get_ur5_berkeley_eef_profile,
     get_ur5_eef_profile,
 )
 
 logger = logging.getLogger(__name__)
+
+_LEGACY_UR5_JOINT_LAYOUT = (
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow",
+    "wrist_1",
+    "wrist_2",
+    "wrist_3",
+)
+_UR5_JOINT_LOWER = np.array([-2 * np.pi, -2 * np.pi, -np.pi, -2 * np.pi, -2 * np.pi, -2 * np.pi])
+_UR5_JOINT_UPPER = -_UR5_JOINT_LOWER
+_UR5_MAX_VELOCITY_RAD_S = 3.2
+# Full RH20T train set max is 18.31 rad/s^2; retain a small diagnostic margin.
+_RH20T_MAX_ACCELERATION_RAD_S2 = 20.0
 
 
 class Cosmos3Client(InferenceClient):
@@ -205,14 +220,23 @@ class Cosmos3Client(InferenceClient):
         super()._set_chunk(env_id, expanded)
 
     def _build_visualization(self, extracted_obs: dict) -> np.ndarray:
-        primary, aux_left, aux_right = extracted_obs["canvas_views"]
+        views = extracted_obs["canvas_views"]
+        if self.capability.observation.layout_id == "vertical_pair":
+            return np.concatenate(views, axis=0)
+        primary, aux_left, aux_right = views
         # Preserve the historical horizontal debug view while the model canvas
         # remains primary-on-top and auxiliaries on the bottom row.
         return np.concatenate((aux_left, primary, aux_right), axis=1)
 
-    def _extract_canvas_views(self, image_obs: dict, *, env_id: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _extract_canvas_views(self, image_obs: dict, *, env_id: int) -> tuple[np.ndarray, ...]:
         observation = self.capability.observation
-        if len(observation.view_roles) != 3:
+        if observation.layout_id == "vertical_pair":
+            if observation.view_roles != ("primary", "aux_left"):
+                raise ValueError(
+                    "Cosmos3 vertical_pair canvas requires ordered roles ('primary', 'aux_left'), "
+                    f"got {observation.view_roles!r}"
+                )
+        elif len(observation.view_roles) != 3:
             raise ValueError(
                 "Cosmos3 primary_top_aux_bottom_pair canvas requires exactly three ordered view roles, "
                 f"got {observation.view_roles!r}"
@@ -244,7 +268,11 @@ class Cosmos3Client(InferenceClient):
         )
         return views
 
-    def _compose_canvas(self, views: tuple[np.ndarray, np.ndarray, np.ndarray]) -> np.ndarray:
+    def _compose_canvas(self, views: tuple[np.ndarray, ...]) -> np.ndarray:
+        if self.capability.observation.layout_id == "vertical_pair":
+            if len(views) != 2:
+                raise ValueError(f"Cosmos3 vertical_pair canvas requires two views, got {len(views)}")
+            return np.concatenate(views, axis=0)
         primary, aux_left, aux_right = views
         size = (self._image_h // 2, self._image_w // 2)
         left = self._resize_for_canvas(aux_left, size=size, dtype=primary.dtype)
@@ -379,6 +407,7 @@ class Cosmos3UR5Client(Cosmos3Client):
         ik_pos_tol: float = 0.005,
         ik_rot_tol: float = 0.05,
         execute_horizon: int = 8,
+        joint_action_layout: tuple[str, ...] | None = None,
     ) -> None:
         self._profile = get_ur5_eef_profile()
         self._env_action_dim = self._profile.env_action_dim + 1
@@ -394,14 +423,7 @@ class Cosmos3UR5Client(Cosmos3Client):
                 robot="ur5",
                 arm_dof=6,
                 action_spaces=("joint_position", "eef_absolute"),
-                joint_action_layout=(
-                    "shoulder_pan",
-                    "shoulder_lift",
-                    "elbow",
-                    "wrist_1",
-                    "wrist_2",
-                    "wrist_3",
-                ),
+                joint_action_layout=joint_action_layout or _LEGACY_UR5_JOINT_LAYOUT,
                 conditioning_by_action_space={
                     "joint_position": JOINT_CURRENT_STATE_CONDITIONING,
                     "eef_absolute": STATELESS_CONDITIONING,
@@ -490,7 +512,11 @@ class Cosmos3UR5Client(Cosmos3Client):
     def _extract_observation(self, raw_obs: dict, *, env_id: int = 0) -> dict:
         image_obs = raw_obs["image_obs"]
         canvas_views = self._extract_canvas_views(image_obs, env_id=env_id)
-        primary_image, aux_left_image, aux_right_image = canvas_views
+        if self.capability.observation.layout_id == "vertical_pair":
+            primary_image, aux_left_image = canvas_views
+            aux_right_image = np.zeros_like(primary_image)
+        else:
+            primary_image, aux_left_image, aux_right_image = canvas_views
 
         proprio_obs = raw_obs["proprio_obs"]
         arm_joint_position = _to_numpy(proprio_obs["arm_joint_pos"][env_id]).astype(np.float32, copy=False)
@@ -562,19 +588,75 @@ class Cosmos3UR5Client(Cosmos3Client):
         action = self._unpack_response(response)
         assert self.policy_contract is not None
         if self.policy_contract.action_space == "joint_position":
-            return self._convert_joint_chunk(action, env_id=env_id)
+            return self._convert_joint_chunk(
+                action,
+                current_joint_position=extracted_obs["arm_joint_position"],
+                env_id=env_id,
+            )
         return self._convert_eef_chunk(action, extracted_obs, env_id=env_id)
 
-    def _convert_joint_chunk(self, action: np.ndarray, *, env_id: int) -> tuple[np.ndarray, list[dict[str, Any]]]:
-        chunk = self._postprocess_chunk(action.astype(np.float32, copy=False))
+    def _convert_joint_chunk(
+        self,
+        action: np.ndarray,
+        *,
+        current_joint_position: np.ndarray,
+        env_id: int,
+    ) -> tuple[np.ndarray, list[dict[str, Any]]]:
+        raw = action.astype(np.float32, copy=False)
+        self._validate_decoded_chunk(raw)
+        diagnostics = self._validate_joint_chunk_safety(raw, current_joint_position, env_id=env_id)
+        chunk = self._postprocess_chunk(raw)
         self._validate_decoded_chunk(chunk)
-        return chunk, [
-            {
-                "env_id": env_id,
-                "action_space": "joint_position",
-                "source_action_shape": tuple(action.shape),
-            }
-        ]
+        return chunk, [diagnostics]
+
+    def _validate_joint_chunk_safety(
+        self,
+        chunk: np.ndarray,
+        current_joint_position: np.ndarray,
+        *,
+        env_id: int,
+    ) -> dict[str, Any]:
+        assert self.policy_contract is not None
+        current = np.asarray(current_joint_position, dtype=np.float32).reshape(6)
+        horizon = min(getattr(self, "execute_horizon", len(chunk)), len(chunk))
+        arm = chunk[:, :6]
+        positions = np.concatenate((current[None], arm[:horizon]), axis=0)
+        step = np.diff(positions, axis=0)
+        velocity = step * self.policy_contract.policy_fps
+        acceleration = np.diff(velocity, axis=0) * self.policy_contract.policy_fps
+        max_velocity = float(np.abs(velocity).max(initial=0.0))
+        max_acceleration = float(np.abs(acceleration).max(initial=0.0))
+        joint_limit_violations = int(np.count_nonzero((arm < _UR5_JOINT_LOWER) | (arm > _UR5_JOINT_UPPER)))
+        gripper_violations = int(np.count_nonzero((chunk[:, 6] < 0.0) | (chunk[:, 6] > 1.0)))
+        diagnostics = {
+            "env_id": env_id,
+            "action_space": "joint_position",
+            "source_action_shape": tuple(chunk.shape),
+            "execute_horizon": horizon,
+            "max_velocity_rad_s": max_velocity,
+            "max_acceleration_rad_s2": max_acceleration,
+            "joint_limit_violations": joint_limit_violations,
+            "gripper_range_violations": gripper_violations,
+            "raw_arm_min": arm.min(axis=0).tolist(),
+            "raw_arm_max": arm.max(axis=0).tolist(),
+            "raw_gripper_min": float(chunk[:, 6].min()),
+            "raw_gripper_max": float(chunk[:, 6].max()),
+        }
+        failures = []
+        if joint_limit_violations:
+            failures.append("joint_limit")
+        if gripper_violations:
+            failures.append("gripper_range")
+        if max_velocity > _UR5_MAX_VELOCITY_RAD_S:
+            failures.append("velocity")
+        if max_acceleration > _RH20T_MAX_ACCELERATION_RAD_S2:
+            failures.append("acceleration")
+        if failures:
+            diagnostics["failures"] = tuple(failures)
+            self._last_diagnostics[env_id] = [diagnostics]
+            logger.error("[%s] event=unsafe_joint_chunk diagnostics=%s", self.__class__.__name__, diagnostics)
+            raise ValueError(f"Unsafe UR5 joint chunk rejected: {', '.join(failures)}")
+        return diagnostics
 
     def _convert_eef_chunk(
         self, action: np.ndarray, extracted_obs: dict, *, env_id: int

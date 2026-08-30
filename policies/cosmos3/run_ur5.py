@@ -53,6 +53,7 @@ from policies.cosmos3.specs import ObservationCapability
 from robolab.registrations.ur5.auto_env_registrations_jointpos import auto_register_ur5_envs
 from robolab.registrations.ur5.camera_presets import get_cosmos3_camera_preset
 from robolab.registrations.ur5.initial_pose_presets import get_ur5_initial_pose_preset
+from robolab.robots.ur5_profile import ARM_JOINT_NAMES
 
 try:
     camera_preset = get_cosmos3_camera_preset(args_cli.camera_preset)
@@ -78,6 +79,9 @@ def make_client(args: argparse.Namespace) -> Cosmos3UR5Client:
         remote_port=args.remote_port,
         observation=ObservationCapability.from_mapping(camera_preset.observation_metadata()),
         execute_horizon=args.execute_horizon,
+        joint_action_layout=(
+            tuple(ARM_JOINT_NAMES) if args.camera_preset == "rh20t_vertical_pair" else None
+        ),
     )
 
 

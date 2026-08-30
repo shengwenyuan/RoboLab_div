@@ -240,6 +240,11 @@ class ProprioceptionObservationCfg(ObsGroup):
         self.concatenate_terms = False
 
 
-# Filtered ContactSensor force matrices require exactly one source body per
-# environment. Preserve the historical left-pad contract used by task code.
-contact_gripper = {"gripper": "{ENV_REGEX_NS}/robot/left_inner_finger_pad"}
+# Isaac 6 keeps URDF links under their kinematic hierarchy instead of the
+# flat Isaac 5 layout. Filtered contacts still use exactly one left-pad body.
+UR5E_LEFT_PAD_PRIM_PATH = (
+    "{ENV_REGEX_NS}/robot/Geometry/base_link/base_link_inertia/shoulder_link/upper_arm_link/"
+    "forearm_link/wrist_1_link/wrist_2_link/wrist_3_link/flange/tool0/robotiq_arg2f_base_link/"
+    "left_inner_knuckle/left_inner_finger/left_inner_finger_pad"
+)
+contact_gripper = {"gripper": UR5E_LEFT_PAD_PRIM_PATH}

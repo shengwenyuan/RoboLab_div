@@ -24,6 +24,18 @@ from robolab.eval.base_client import InferenceClient
 from robolab.robots.ur5_profile import get_ur5_berkeley_eef_profile, get_ur5_eef_profile
 
 _PRESET_METADATA = {
+    "rh20t_vertical_pair": {
+        "layout_id": "vertical_pair",
+        "view_shape_hw": (360, 640),
+        "canvas_shape_hw": (720, 640),
+        "view_roles": ("primary", "aux_left"),
+        "role_sources": {
+            "primary": "over_shoulder_left_camera",
+            "aux_left": "over_shoulder_right_camera",
+        },
+        "missing_view_policies": ("error",),
+        "viewpoint": "concat_view",
+    },
     "wrist_left_right": {
         "layout_id": "primary_top_aux_bottom_pair",
         "view_shape_hw": (360, 640),
@@ -73,7 +85,9 @@ def _observation_contract(preset_name: str) -> ObservationContract:
         view_shape_hw=metadata["view_shape_hw"],
         canvas_shape_hw=metadata["canvas_shape_hw"],
         view_roles=metadata["view_roles"],
-        missing_view_policy="error" if preset_name == "wrist_left_right" else "black",
+        missing_view_policy=(
+            "error" if preset_name in {"wrist_left_right", "rh20t_vertical_pair"} else "black"
+        ),
         viewpoint=metadata["viewpoint"],
         description=f"{preset_name} prose",
     )
@@ -93,7 +107,18 @@ def _contract(
     eef_frame: str = "berkeley_tcp",
 ) -> PolicyContract:
     if action_space == "joint_position":
-        layout = ("shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3", "gripper")
+        if preset == "rh20t_vertical_pair":
+            layout = (
+                "shoulder_pan_joint",
+                "shoulder_lift_joint",
+                "elbow_joint",
+                "wrist_1_joint",
+                "wrist_2_joint",
+                "wrist_3_joint",
+                "gripper",
+            )
+        else:
+            layout = ("shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3", "gripper")
         eef_frame = quaternion_order = None
     else:
         layout = ("x", "y", "z", "qx", "qy", "qz", "qw", "gripper")
@@ -140,11 +165,16 @@ def _bare_client(contract: PolicyContract) -> Cosmos3UR5Client:
         and tuple(role for role in metadata["view_roles"] if metadata["role_sources"][role] is not None)
         == contract.present_view_roles
     )
+    joint_layout = (
+        tuple(name for name in contract.action_layout[:-1])
+        if contract.observation.layout_id == "vertical_pair"
+        else ("shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3")
+    )
     client.capability = ClientCapability(
         robot="ur5",
         arm_dof=6,
         action_spaces=("joint_position", "eef_absolute"),
-        joint_action_layout=("shoulder_pan", "shoulder_lift", "elbow", "wrist_1", "wrist_2", "wrist_3"),
+        joint_action_layout=joint_layout,
         conditioning_by_action_space={
             "joint_position": JOINT_CURRENT_STATE_CONDITIONING,
             "eef_absolute": STATELESS_CONDITIONING,
@@ -178,10 +208,14 @@ def test_camera_preset_carries_matching_observation_capability() -> None:
     standard_capability = ObservationCapability.from_mapping(_PRESET_METADATA["wrist_left_right"])
     berkeley_capability = ObservationCapability.from_mapping(_PRESET_METADATA["berkeley_eef"])
     robomind_capability = ObservationCapability.from_mapping(_PRESET_METADATA["robomind_single"])
+    rh20t_capability = ObservationCapability.from_mapping(_PRESET_METADATA["rh20t_vertical_pair"])
 
     standard_capability.validate(_observation_contract("wrist_left_right"), _present_view_roles("wrist_left_right"))
     berkeley_capability.validate(_observation_contract("berkeley_eef"), _present_view_roles("berkeley_eef"))
     robomind_capability.validate(_observation_contract("robomind_single"), _present_view_roles("robomind_single"))
+    rh20t_capability.validate(
+        _observation_contract("rh20t_vertical_pair"), _present_view_roles("rh20t_vertical_pair")
+    )
     assert standard_capability.missing_view_policies == ("error", "black")
     assert berkeley_capability.missing_view_policies == ("black",)
     assert robomind_capability.role_sources["primary"] == "robomind_top_camera"
@@ -202,9 +236,34 @@ def test_camera_registration_is_the_single_ur5_preset_registry() -> None:
     assert '"wrist_left_right"' in source
     assert '"berkeley_eef"' in source
     assert '"robomind_single"' in source
+    assert '"rh20t_vertical_pair"' in source
     assert '"primary": "robomind_top_camera"' in source
     assert "ROBOMIND_SINGLE = [RoboMindGlobalCameraCfg, RoboMindTopCameraCfg]" in source
     assert "get_cosmos3_camera_preset" in source
+
+
+def test_rh20t_vertical_pair_resizes_and_stacks_two_real_cameras() -> None:
+    client = _bare_client(_contract(action_space="joint_position", preset="rh20t_vertical_pair"))
+    client._image_h, client._image_w = 3, 5
+    top = torch.full((1, 6, 10, 3), 17, dtype=torch.uint8)
+    bottom = torch.full((1, 4, 8, 3), 29, dtype=torch.uint8)
+
+    views = client._extract_canvas_views(
+        {
+            "over_shoulder_left_camera": top,
+            "over_shoulder_right_camera": bottom,
+        },
+        env_id=0,
+    )
+    canvas = client._compose_canvas(views)
+    visualization = client._build_visualization({"canvas_views": views})
+
+    assert len(views) == 2
+    assert views[0].shape == views[1].shape == (3, 5, 3)
+    assert canvas.shape == (6, 5, 3)
+    np.testing.assert_array_equal(canvas[:3], np.full((3, 5, 3), 17, dtype=np.uint8))
+    np.testing.assert_allclose(canvas[3:], np.full((3, 5, 3), 29, dtype=np.uint8), atol=1)
+    np.testing.assert_array_equal(visualization, canvas)
 
 
 def test_ur5_canvas_preserves_selected_right_camera() -> None:
@@ -268,12 +327,27 @@ def test_ur5_joint_contract_never_initializes_eef_bridge() -> None:
     action = np.zeros((12, 7), dtype=np.float32)
     action[:, -1] = 0.75
 
-    chunk, diagnostics = client._convert_response_chunk({"action": action}, {}, env_id=2)
+    chunk, diagnostics = client._convert_response_chunk(
+        {"action": action}, {"arm_joint_position": np.zeros(6, dtype=np.float32)}, env_id=2
+    )
 
     assert chunk.shape == (12, 7)
     np.testing.assert_array_equal(chunk[:, -1], np.ones(12, dtype=np.float32))
     assert diagnostics[0]["action_space"] == "joint_position"
     assert client._eef_bridge is None
+
+
+def test_ur5_joint_guard_rejects_unsafe_first_step_without_clamping() -> None:
+    client = _bare_client(_contract(action_space="joint_position", preset="rh20t_vertical_pair"))
+    action = np.zeros((32, 7), dtype=np.float32)
+    action[0, 0] = 0.5
+
+    with pytest.raises(ValueError, match="Unsafe UR5 joint chunk rejected"):
+        client._convert_response_chunk(
+            {"action": action}, {"arm_joint_position": np.zeros(6, dtype=np.float32)}, env_id=4
+        )
+
+    assert client._last_diagnostics[4][0]["failures"] == ("velocity", "acceleration")
 
 
 @pytest.mark.parametrize(

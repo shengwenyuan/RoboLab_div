@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from isaaclab.sim.spawners.from_files import spawn_from_urdf
 from isaaclab.sim.spawners.materials import RigidBodyMaterialCfg
+from isaaclab.sim.schemas import activate_contact_sensors
 from isaaclab.sim.utils import bind_physics_material, find_matching_prim_paths
 from pxr import Sdf, Usd, UsdPhysics
 
@@ -43,6 +44,30 @@ ROBOTIQ_PAD_COLLIDER_PATHS = tuple(
 )
 
 
+def _resolve_link_prim(stage: Usd.Stage, robot_path: str, link_name: str) -> Usd.Prim:
+    """Resolve flat Isaac 5 links and nested Isaac 6 URDF link trees."""
+
+    direct = stage.GetPrimAtPath(Sdf.Path(f"{robot_path}/{link_name}"))
+    if direct.IsValid():
+        return direct
+    root = stage.GetPrimAtPath(robot_path)
+    matches = [prim for prim in Usd.PrimRange(root) if prim.GetName() == link_name]
+    if len(matches) != 1:
+        paths = [str(prim.GetPath()) for prim in matches]
+        raise RuntimeError(f"Expected one UR5e link {link_name!r} below {robot_path}, found {paths}")
+    return matches[0]
+
+
+def _resolve_pad_collider(stage: Usd.Stage, pad: Usd.Prim, section: str) -> Usd.Prim:
+    """Resolve Isaac 6 direct pad colliders and Isaac 5 nested colliders."""
+
+    for relative_path in (section, f"collisions/{section}/box"):
+        collider = stage.GetPrimAtPath(pad.GetPath().AppendPath(relative_path))
+        if collider.IsValid():
+            return collider
+    raise RuntimeError(f"Missing Robotiq {section} collider below {pad.GetPath()}")
+
+
 def spawn_ur5e_robotiq_2f85(
     prim_path: str,
     cfg,
@@ -60,26 +85,25 @@ def spawn_ur5e_robotiq_2f85(
 
     for robot_path in robot_paths:
         for first_link, second_link in ROBOTIQ_COLLISION_FILTER_PAIRS:
-            first_path = Sdf.Path(f"{robot_path}/{first_link}")
-            second_path = Sdf.Path(f"{robot_path}/{second_link}")
-            first_prim = stage.GetPrimAtPath(first_path)
-            second_prim = stage.GetPrimAtPath(second_path)
-            if not first_prim.IsValid() or not second_prim.IsValid():
-                raise RuntimeError(
-                    f"Cannot apply Robotiq collision filter to missing link pair {first_path} <-> {second_path}"
-                )
+            first_prim = _resolve_link_prim(stage, robot_path, first_link)
+            second_prim = _resolve_link_prim(stage, robot_path, second_link)
             relation = UsdPhysics.FilteredPairsAPI.Apply(first_prim).CreateFilteredPairsRel()
-            relation.AddTarget(second_path)
+            relation.AddTarget(second_prim.GetPath())
 
-        # Only the tiny collision subtrees are instanced. Expand those two
-        # roots so lower and upper pad boxes can retain distinct source
-        # friction instead of disabling instancing for the complete robot.
+        # Isaac 6 nests rigid links, while the generic activation traversal
+        # stops at the first rigid body. Explicitly activate the two pad links.
+        for side in ("left", "right"):
+            pad = _resolve_link_prim(stage, robot_path, f"{side}_inner_finger_pad")
+            activate_contact_sensors(str(pad.GetPath()), stage=stage)
+
+        # Isaac 5 may instance these tiny collision subtrees. Expand only
+        # those roots; Isaac 6 emits editable colliders directly on the pad.
         for relative_path in ROBOTIQ_PAD_COLLISION_ROOT_PATHS:
-            collision_root_path = f"{robot_path}/{relative_path}"
+            link_name, child_path = relative_path.split("/", 1)
+            collision_root_path = _resolve_link_prim(stage, robot_path, link_name).GetPath().AppendPath(child_path)
             collision_root = stage.GetPrimAtPath(collision_root_path)
-            if not collision_root.IsValid() or not collision_root.IsInstance():
-                raise RuntimeError(f"Expected instanced Robotiq collision root at {collision_root_path}")
-            collision_root.SetInstanceable(False)
+            if collision_root.IsValid() and collision_root.IsInstance():
+                collision_root.SetInstanceable(False)
 
         for section, friction in ROBOTIQ_PAD_FRICTION_BY_SECTION.items():
             pad_material_cfg = RigidBodyMaterialCfg(
@@ -92,14 +116,10 @@ def spawn_ur5e_robotiq_2f85(
             material_path = f"{robot_path}/robotiq_{section}_physics_material"
             pad_material_cfg.func(material_path, pad_material_cfg)
             for side in ("left", "right"):
-                collider_path = f"{robot_path}/{side}_inner_finger_pad/collisions/{section}/box"
-                collider_prim = stage.GetPrimAtPath(collider_path)
-                if (
-                    not collider_prim.IsValid()
-                    or collider_prim.IsInstanceProxy()
-                    or not collider_prim.HasAPI(UsdPhysics.CollisionAPI)
-                ):
-                    raise RuntimeError(f"Cannot bind Robotiq pad material to collider {collider_path}")
-                bind_physics_material(collider_path, material_path, stage)
+                pad = _resolve_link_prim(stage, robot_path, f"{side}_inner_finger_pad")
+                collider = _resolve_pad_collider(stage, pad, section)
+                if collider.IsInstanceProxy() or not collider.HasAPI(UsdPhysics.CollisionAPI):
+                    raise RuntimeError(f"Cannot bind Robotiq pad material to collider {collider.GetPath()}")
+                bind_physics_material(str(collider.GetPath()), material_path, stage)
 
     return prim

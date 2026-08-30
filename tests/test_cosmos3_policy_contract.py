@@ -268,7 +268,7 @@ def test_client_connects_without_a_profile_registry(monkeypatch: pytest.MonkeyPa
             return {"policy_contract": advertised.to_metadata()}
 
     monkeypatch.setattr(
-        "policies.cosmos3.client.websocket_client_policy.WebsocketClientPolicy",
+        "policies.cosmos3.client.WebsocketClientPolicy",
         lambda host, port: _Transport(),
     )
     capability = ClientCapability(

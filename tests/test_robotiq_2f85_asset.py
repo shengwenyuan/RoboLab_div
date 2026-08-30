@@ -281,7 +281,7 @@ def test_isaac_config_drives_only_master_and_parses_mimics() -> None:
         import omni.physics  # noqa: F401
     except ModuleNotFoundError:
         pytest.skip("Isaac Sim application is not running; covered by the USD integration validation")
-    from robolab.robots.ur5 import GRIPPER_MIMIC_JOINT_REGEX, UR5eCfg, contact_gripper
+    from robolab.robots.ur5 import GRIPPER_MIMIC_JOINT_REGEX, UR5E_LEFT_PAD_PRIM_PATH, UR5eCfg, contact_gripper
     from robolab.robots.ur5_spawn import (
         ROBOTIQ_COLLISION_FILTER_PAIRS,
         ROBOTIQ_INTERNAL_COLLISION_FILTER_PAIRS,
@@ -310,4 +310,5 @@ def test_isaac_config_drives_only_master_and_parses_mimics() -> None:
     assert cfg.actuators["gripper"].effort_limit_sim == pytest.approx(5.0)
     assert cfg.actuators["gripper"].stiffness == pytest.approx(100.0)
     assert cfg.actuators["gripper"].damping == pytest.approx(10.0)
-    assert contact_gripper == {"gripper": "{ENV_REGEX_NS}/robot/left_inner_finger_pad"}
+    assert contact_gripper == {"gripper": UR5E_LEFT_PAD_PRIM_PATH}
+    assert UR5E_LEFT_PAD_PRIM_PATH.endswith("/left_inner_finger/left_inner_finger_pad")

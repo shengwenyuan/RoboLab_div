@@ -15,6 +15,11 @@ POLICY_CONTRACT_VERSION = 1
 DEFAULT_CONTROL_FPS = 15
 CANONICAL_GRIPPER_SEMANTICS = "close_fraction"
 OBSERVATION_VIEW_ROLES = ("primary", "aux_left", "aux_right")
+VERTICAL_PAIR_VIEW_ROLES = ("primary", "aux_left")
+
+
+def _expected_view_roles(layout_id: str) -> tuple[str, ...]:
+    return VERTICAL_PAIR_VIEW_ROLES if layout_id == "vertical_pair" else OBSERVATION_VIEW_ROLES
 
 
 @dataclass(frozen=True)
@@ -32,9 +37,10 @@ class ObservationContract:
     def __post_init__(self) -> None:
         if not self.layout_id or not self.view_roles or not self.viewpoint:
             raise ValueError("Cosmos3 observation layout_id, view_roles, and viewpoint must be non-empty")
-        if self.view_roles != OBSERVATION_VIEW_ROLES:
+        expected_roles = _expected_view_roles(self.layout_id)
+        if self.view_roles != expected_roles:
             raise ValueError(
-                f"Cosmos3 observation view_roles must be positional slots {OBSERVATION_VIEW_ROLES!r}, "
+                f"Cosmos3 observation view_roles must be positional slots {expected_roles!r}, "
                 f"got {self.view_roles!r}"
             )
         if any(value <= 0 for value in (*self.view_shape_hw, *self.canvas_shape_hw)):
@@ -77,9 +83,10 @@ class ObservationCapability:
     viewpoint: str = "concat_view"
 
     def __post_init__(self) -> None:
-        if self.view_roles != OBSERVATION_VIEW_ROLES:
+        expected_roles = _expected_view_roles(self.layout_id)
+        if self.view_roles != expected_roles:
             raise ValueError(
-                f"Client observation view_roles must be positional slots {OBSERVATION_VIEW_ROLES!r}, "
+                f"Client observation view_roles must be positional slots {expected_roles!r}, "
                 f"got {self.view_roles!r}"
             )
         if set(self.role_sources) != set(self.view_roles):

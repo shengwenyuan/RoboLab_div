@@ -64,7 +64,7 @@ RoboLab contributes only facts that are local to the selected runtime: robot ide
 
 Wire gripper semantics are always `close_fraction`: `0=open`, `1=closed`. The threshold used by all joint and EEF paths is shared. Lower-rate policies keep simulation/controllers at 15 Hz; for example, a 5 Hz policy action is held for three control steps. Environment decimation and physics timing are unchanged.
 
-UR5 image layout is configured independently from the action contract. Every manifest and preset uses positional roles `primary`, `aux_left`, and `aux_right`: primary is placed on top, with the two auxiliaries below. Each preset maps those slots to a real camera stream or an explicit black view. `run_ur5.py` defaults to `--camera-preset wrist_left_right`, which maps wrist to primary and registers real left/right auxiliary views. For Berkeley models, select `--camera-preset berkeley_eef` for wrist primary, external aux-left, and black aux-right. For RoboMIND-single models, select `--camera-preset robomind_single` for overhead primary and two black auxiliaries. All presets preserve the same canvas shape, and the client does not discard a configured real-camera stream.
+UR5 image layout is configured independently from the action contract. Existing DROID/RoboMIND presets keep the three-slot canvas: primary is above aux-left and aux-right. RH20T joint policies use `--camera-preset rh20t_vertical_pair`: the two real over-shoulder cameras are each resized to `360x640` and stacked vertically into the trained `720x640` canvas. The client checks the selected preset against the server manifest and never silently drops or invents a policy view.
 
 Start one server from a checkpoint carrying the matching manifest (or pass the manifest explicitly):
 
