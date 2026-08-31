@@ -80,6 +80,7 @@ parser.add_argument(
     default="default",
     help=(
         "UR5 reset geometry: default preserves standard RoboLab home; "
+        "rh20t_ur5 applies a RoboLab-safe cfg4-aligned arm and closed-gripper reset; "
         "robomind_ur5 applies the verified RoboMIND joint pose and base yaw."
     ),
 )
@@ -458,6 +459,7 @@ def main() -> None:
         task=args_cli.task,
         cameras=get_camera_preset(args_cli.camera_preset),
         initial_arm_joint_positions=initial_pose_preset.arm_joint_positions,
+        initial_gripper_close_fraction=initial_pose_preset.gripper_close_fraction,
         initial_root_rot_wxyz=initial_pose_preset.root_rot_wxyz,
     )
     env_name = _select_env()

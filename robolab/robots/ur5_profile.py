@@ -19,6 +19,26 @@ ARM_JOINT_NAMES = [
     "wrist_3_joint",
 ]
 GRIPPER_JOINT_NAMES = ["finger_joint"]
+GRIPPER_MIMIC_JOINT_NAMES = (
+    "right_outer_knuckle_joint",
+    "left_inner_knuckle_joint",
+    "right_inner_knuckle_joint",
+    "left_inner_finger_joint",
+    "right_inner_finger_joint",
+)
+GRIPPER_RESET_JOINT_NAMES = (*GRIPPER_JOINT_NAMES, *GRIPPER_MIMIC_JOINT_NAMES)
+GRIPPER_OPEN_POS = 0.0
+# Menagerie v4 splits the actuator through two 0.485 tendon coefficients.
+GRIPPER_CLOSED_POS = 0.8 / (2.0 * 0.485)
+
+
+def gripper_reset_joint_positions(close_fraction: float) -> dict[str, float]:
+    """Return a mimic-consistent gripper reset from an open-to-closed fraction."""
+
+    if not 0.0 <= close_fraction <= 1.0:
+        raise ValueError(f"Expected gripper close fraction in [0, 1], got {close_fraction}")
+    target = GRIPPER_OPEN_POS + close_fraction * (GRIPPER_CLOSED_POS - GRIPPER_OPEN_POS)
+    return {joint_name: target for joint_name in GRIPPER_RESET_JOINT_NAMES}
 
 UR5E_URDF_PATH = os.path.join(ROBOTS_DIR, "ur5e", "ur5e_robotiq_2f_85.urdf")
 UR5E_PINOCCHIO_URDF_PATH = os.path.join(ROBOTS_DIR, "ur5e", "ur5e_mesh.urdf")

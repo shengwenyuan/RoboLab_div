@@ -24,6 +24,7 @@ parser.add_argument(
     help=(
         "UR5 camera preset for policy observations (default: wrist_left_right). "
         "Use robomind_single together with --initial-pose-preset robomind_ur5; "
+        "use rh20t_vertical_pair together with --initial-pose-preset rh20t_ur5. "
         "standard and Berkeley evaluations normally use the default initial pose. "
         "The camera canvas contract is checked against the server manifest during handshake."
     ),
@@ -33,6 +34,7 @@ parser.add_argument(
     default="default",
     help=(
         "UR5 simulator reset geometry: default preserves the standard RoboLab home; "
+        "rh20t_ur5 applies a RoboLab-safe cfg4-aligned arm and closed-gripper reset; "
         "robomind_ur5 applies the verified RoboMIND joint pose and base yaw. "
         "This setting does not override the model action schema."
     ),
@@ -66,6 +68,7 @@ auto_register_ur5_envs(
     task=args_cli.task,
     cameras=list(camera_preset.cameras),
     initial_arm_joint_positions=initial_pose_preset.arm_joint_positions,
+    initial_gripper_close_fraction=initial_pose_preset.gripper_close_fraction,
     initial_root_rot_wxyz=initial_pose_preset.root_rot_wxyz,
 )
 if clear_task_filter_for_explicit_paths(args_cli):

@@ -11,11 +11,25 @@ class UR5InitialPosePreset:
     """A canonical UR5 reset pose in one evaluation coordinate convention."""
 
     arm_joint_positions: tuple[float, ...] | None = None
+    gripper_close_fraction: float | None = None
     root_rot_wxyz: tuple[float, float, float, float] | None = None
 
 
 UR5_INITIAL_POSE_PRESETS = {
     "default": UR5InitialPosePreset(),
+    # RoboLab-safe home with cfg4-aligned wrist yaw and closed gripper.
+    # Every arm joint remains inside cfg4 q01..q99.
+    "rh20t_ur5": UR5InitialPosePreset(
+        arm_joint_positions=(
+            0.0,
+            -1.57079632679,
+            1.57079632679,
+            -1.57079632679,
+            -1.57079632679,
+            -0.21157962083816528,
+        ),
+        gripper_close_fraction=1.0,
+    ),
     # Representative real RoboMIND pose matched to episode 2836. The +52.401°
     # root yaw rotates this real pose toward the RoboLab work area.
     "robomind_ur5": UR5InitialPosePreset(

@@ -18,7 +18,7 @@ def zero_image_like_camera(env, sensor_cfg):
 def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity=None, task=None, cameras=None,
                            randomize_background=False, background_seed=None,
                            env_postfix="UR5eJointPosition", initial_arm_joint_positions=None,
-                           initial_root_rot_wxyz=None):
+                           initial_gripper_close_fraction=None, initial_root_rot_wxyz=None):
     """Automatically discover and register tasks with the UR5e robot."""
     from isaaclab.managers import ObservationGroupCfg as ObsGroup
     from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -41,7 +41,7 @@ def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity
         WristCameraCfg,
         contact_gripper,
     )
-    from robolab.robots.ur5_profile import ARM_JOINT_NAMES
+    from robolab.robots.ur5_profile import ARM_JOINT_NAMES, gripper_reset_joint_positions
     from robolab.variations.backgrounds import HomeOfficeBackgroundCfg
     from robolab.variations.camera import EgocentricMirroredCameraCfg
     from robolab.variations.lighting import SphereLightCfg
@@ -99,7 +99,10 @@ def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity
     real_cameras = [camera for camera in cameras if camera is not ZeroOverShoulderRightCameraCfg]
     has_wrist_camera = any(camera is WristCameraCfg for camera in real_cameras)
     robot_cfg = UR5eWithWristCameraCfg if has_wrist_camera else UR5eCfg
-    if initial_arm_joint_positions is not None or initial_root_rot_wxyz is not None:
+    if any(
+        value is not None
+        for value in (initial_arm_joint_positions, initial_gripper_close_fraction, initial_root_rot_wxyz)
+    ):
         configured_robot = copy.deepcopy(robot_cfg().robot)
         if initial_arm_joint_positions is not None:
             if len(initial_arm_joint_positions) != len(ARM_JOINT_NAMES):
@@ -108,6 +111,10 @@ def auto_register_ur5_envs(task_dirs=DEFAULT_TASK_SUBFOLDERS, lighting_intensity
                 )
             configured_robot.init_state.joint_pos.update(
                 dict(zip(ARM_JOINT_NAMES, map(float, initial_arm_joint_positions)))
+            )
+        if initial_gripper_close_fraction is not None:
+            configured_robot.init_state.joint_pos.update(
+                gripper_reset_joint_positions(float(initial_gripper_close_fraction))
             )
         if initial_root_rot_wxyz is not None:
             if len(initial_root_rot_wxyz) != 4:

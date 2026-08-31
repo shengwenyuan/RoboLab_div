@@ -17,19 +17,18 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import TiledCameraCfg
 from isaaclab.utils import configclass
 
-from robolab.robots.ur5_profile import ARM_JOINT_NAMES, GRIPPER_JOINT_NAMES, UR5E_URDF_PATH
+from robolab.robots.ur5_profile import (
+    ARM_JOINT_NAMES,
+    GRIPPER_CLOSED_POS,
+    GRIPPER_JOINT_NAMES,
+    GRIPPER_MIMIC_JOINT_NAMES,
+    GRIPPER_OPEN_POS,
+    UR5E_URDF_PATH,
+)
 from robolab.robots.ur5_spawn import spawn_ur5e_robotiq_2f85
 
 UR5E_USD_CACHE_DIR = "/tmp/robolab_ur5e_robotiq_2f_85_menagerie_v4_v5_usd"
-GRIPPER_MIMIC_JOINT_REGEX = (
-    "^(right_outer_knuckle_joint|left_inner_knuckle_joint|right_inner_knuckle_joint|"
-    "left_inner_finger_joint|right_inner_finger_joint)$"
-)
-GRIPPER_OPEN_POS = 0.0
-# Menagerie v4 splits the actuator through two 0.485 tendon coefficients.
-# A full 0.8 control target therefore settles at this driver angle, with
-# roughly 0.095 mm of nominal pad preload.
-GRIPPER_CLOSED_POS = 0.8 / (2.0 * 0.485)
+GRIPPER_MIMIC_JOINT_REGEX = f"^({'|'.join(GRIPPER_MIMIC_JOINT_NAMES)})$"
 GRIPPER_OPEN_COMMAND = {"finger_joint": GRIPPER_OPEN_POS}
 GRIPPER_CLOSE_COMMAND = {"finger_joint": GRIPPER_CLOSED_POS}
 UR5E_HOME_JOINT_POS = {
