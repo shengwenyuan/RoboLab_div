@@ -59,6 +59,7 @@ _UR5_JOINT_UPPER = -_UR5_JOINT_LOWER
 _UR5_MAX_VELOCITY_RAD_S = 3.2
 # Full RH20T train set max is 18.31 rad/s^2; retain a small diagnostic margin.
 _RH20T_MAX_ACCELERATION_RAD_S2 = 20.0
+_GRIPPER_RANGE_TOLERANCE = 0.05
 
 
 class Cosmos3Client(InferenceClient):
@@ -627,7 +628,13 @@ class Cosmos3UR5Client(Cosmos3Client):
         max_velocity = float(np.abs(velocity).max(initial=0.0))
         max_acceleration = float(np.abs(acceleration).max(initial=0.0))
         joint_limit_violations = int(np.count_nonzero((arm < _UR5_JOINT_LOWER) | (arm > _UR5_JOINT_UPPER)))
-        gripper_violations = int(np.count_nonzero((chunk[:, 6] < 0.0) | (chunk[:, 6] > 1.0)))
+        gripper = chunk[:, 6]
+        gripper_nominal_violations = int(np.count_nonzero((gripper < 0.0) | (gripper > 1.0)))
+        gripper_violations = int(
+            np.count_nonzero(
+                (gripper < -_GRIPPER_RANGE_TOLERANCE) | (gripper > 1.0 + _GRIPPER_RANGE_TOLERANCE)
+            )
+        )
         diagnostics = {
             "env_id": env_id,
             "action_space": "joint_position",
@@ -636,6 +643,7 @@ class Cosmos3UR5Client(Cosmos3Client):
             "max_velocity_rad_s": max_velocity,
             "max_acceleration_rad_s2": max_acceleration,
             "joint_limit_violations": joint_limit_violations,
+            "gripper_nominal_range_violations": gripper_nominal_violations,
             "gripper_range_violations": gripper_violations,
             "raw_arm_min": arm.min(axis=0).tolist(),
             "raw_arm_max": arm.max(axis=0).tolist(),

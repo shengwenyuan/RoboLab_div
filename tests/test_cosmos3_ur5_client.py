@@ -350,6 +350,32 @@ def test_ur5_joint_guard_rejects_unsafe_first_step_without_clamping() -> None:
     assert client._last_diagnostics[4][0]["failures"] == ("velocity", "acceleration")
 
 
+def test_ur5_joint_guard_tolerates_small_raw_gripper_overshoot_before_binarizing() -> None:
+    client = _bare_client(_contract(action_space="joint_position", preset="rh20t_vertical_pair"))
+    action = np.zeros((32, 7), dtype=np.float32)
+    action[:, -1] = 1.02
+
+    chunk, diagnostics = client._convert_response_chunk(
+        {"action": action}, {"arm_joint_position": np.zeros(6, dtype=np.float32)}, env_id=5
+    )
+
+    np.testing.assert_array_equal(chunk[:, -1], np.ones(32, dtype=np.float32))
+    assert diagnostics[0]["raw_gripper_max"] == np.float32(1.02)
+    assert diagnostics[0]["gripper_nominal_range_violations"] == 32
+    assert diagnostics[0]["gripper_range_violations"] == 0
+
+
+def test_ur5_joint_guard_rejects_gripper_outside_safety_tolerance() -> None:
+    client = _bare_client(_contract(action_space="joint_position", preset="rh20t_vertical_pair"))
+    action = np.zeros((32, 7), dtype=np.float32)
+    action[:, -1] = 1.06
+
+    with pytest.raises(ValueError, match="Unsafe UR5 joint chunk rejected: gripper_range"):
+        client._convert_response_chunk(
+            {"action": action}, {"arm_joint_position": np.zeros(6, dtype=np.float32)}, env_id=6
+        )
+
+
 @pytest.mark.parametrize(
     ("eef_frame", "preset", "profile_factory"),
     [
