@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib.util
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -129,6 +130,7 @@ def test_cosmos_ur5_observation_converts_tool0_pose_to_berkeley_tcp() -> None:
     from policies.cosmos3.client import Cosmos3UR5Client
 
     client = object.__new__(Cosmos3UR5Client)
+    client.capability = SimpleNamespace(observation=SimpleNamespace(layout_id="legacy_three_view"))
     client._profile = get_ur5_berkeley_eef_profile()
     client._image_h = 2
     client._image_w = 2
@@ -149,7 +151,7 @@ def test_cosmos_ur5_observation_converts_tool0_pose_to_berkeley_tcp() -> None:
             "gripper_pos": torch.zeros((1, 1), dtype=torch.float32),
             "ee_pos": torch.tensor([[0.1, 0.2, 0.3]], dtype=torch.float32),
             # tool0 rotated +90 degrees around Y: local +Z points along world +X.
-            "ee_quat": torch.tensor([[half_sqrt_2, 0.0, half_sqrt_2, 0.0]], dtype=torch.float32),
+            "ee_quat": torch.tensor([[0.0, half_sqrt_2, 0.0, half_sqrt_2]], dtype=torch.float32),
         },
     }
 
